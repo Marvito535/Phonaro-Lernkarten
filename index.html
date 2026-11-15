@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="de">
+    
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="stylesheet" href="./styles.css"> <!-- Verlinkt die CSS-Datei -->
+<title>Phonaro Lernkarten</title>
+</head>
+
+<body>
+
+<!-- Oberer Bereich: Lernkarten und Pomodoro nebeneinander -->
+<div class="layout">
+  
+  <!-- Hauptfenster: Phonaro Lernkarten -->
+  <div class="win" id="lernkarten-win">
+    <div class="title"><span>Phonaro Lernkarten</span><span class="x">×</span></div>
+    <div class="menu" id="tabs"></div>
+    <div class="panel" id="main"></div>
+    <div class="status"><span id="st1"></span><span id="st2"></span><span id="sync"></span></div>
+  </div>
+
+  <!-- Zweites Fenster: Pomodoro -->
+  <div class="win" id="pomodoro-win">
+    <div class="title"><span>Pomodoro</span><span class="x">×</span></div>
+    <div class="panel" id="pomodoro"></div>
+  </div>
+
+</div>
+
+<!-- Unterer Bereich: Skript als eigener Abschnitt -->
+<div class="skript-section">
+  <div class="win" id="skript-win">
+    <div class="title"><span>Skript</span><span class="x">×</span></div>
+    <div class="panel" id="skript"></div>
+  </div>
+</div>
+
+
+<script type="module" src="./main.js"></script>
+
+
+
+</body>
+</html>

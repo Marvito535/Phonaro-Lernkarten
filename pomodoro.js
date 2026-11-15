@@ -1,0 +1,198 @@
+// pomodoro.js – Pomodoro-Timer (eigenständiges Modul)
+//
+// Kennt keine anderen Module deiner App und bringt kein eigenes CSS mit.
+// Es benutzt die Klassen aus deiner CSS-Datei. Falls du sie dort umbenannt
+// hast, ändere sie nur hier in der Liste KLASSE.
+
+const KLASSE = {
+  btn: 'btn',      // Win98-Button
+  sunk: 'sunk',    // eingedrückte weiße Fläche
+  row: 'row',      // Zeile mit Abstand
+  muted: 'muted',  // graue Hinweisschrift
+  bar: 'bar',      // Fortschrittsbalken (mit <i> darin)
+  hide: 'hide'     // display:none
+};
+
+const KEY = 'phonaro-pomodoro';
+const NAMEN = { arbeit: 'Arbeiten', kurz: 'Kurze Pause', lang: 'Lange Pause' };
+const RUNDEN_BIS_LANG = 4;   // nach 4 Arbeitsphasen kommt die lange Pause
+
+const heuteTag = () => new Date().toISOString().slice(0, 10);
+
+export class Pomodoro {
+  // optionen: { arbeit: 25, kurz: 5, lang: 15 }  (Minuten)
+  constructor(container, optionen = {}) {
+    this.el = typeof container === 'string' ? document.querySelector(container) : container;
+    this.el.classList.add('pomodoro');   // Haken für dein CSS
+    this.min = { arbeit: 25, kurz: 5, lang: 15, ...optionen };
+    this.phase = 'arbeit';
+    this.runden = 0;          // abgeschlossene Arbeitsphasen im aktuellen Zyklus
+    this.heute = 0;           // abgeschlossene Arbeitsphasen heute
+    this.rest = 0;            // verbleibende Millisekunden
+    this.ende = null;         // Zeitpunkt, an dem die Phase endet (nur wenn sie läuft)
+    this.timer = null;
+    this.audio = null;
+    this.titelOriginal = document.title;
+  }
+
+  // ---------- Start ----------
+  init() {
+    this.laden();
+    this.rest = this.min[this.phase] * 60000;
+    this.render();
+    return this;
+  }
+
+  // ---------- von außen nutzbar ----------
+  get laeuft() { return this.ende !== null; }
+
+  start() {
+    if (this.laeuft) return;
+    this.audioVorbereiten();
+    this.ende = Date.now() + this.rest;
+    this.timer = setInterval(() => this.tick(), 250);
+    this.anzeigen();
+  }
+
+  pause() {
+    if (!this.laeuft) return;
+    this.rest = Math.max(0, this.ende - Date.now());
+    this.ende = null;
+    clearInterval(this.timer);
+    this.anzeigen();
+  }
+
+  reset() {
+    this.pause();
+    this.rest = this.min[this.phase] * 60000;
+    this.anzeigen();
+  }
+
+  skip() {
+    this.pause();
+    this.naechstePhase(false);
+  }
+
+  show(an = true) { this.el.classList.toggle(KLASSE.hide, !an); }
+
+  // ---------- Ablauf ----------
+  tick() {
+    this.rest = this.ende - Date.now();
+    if (this.rest <= 0) this.fertig();
+    else this.anzeigen();
+  }
+
+  fertig() {
+    clearInterval(this.timer);
+    this.ende = null;
+    this.piep();
+    this.naechstePhase(true);
+  }
+
+  // gezaehlt = true: Phase wurde zu Ende gebracht (zählt für die Statistik)
+  naechstePhase(gezaehlt) {
+    if (this.phase === 'arbeit') {
+      if (gezaehlt) { this.heute++; this.runden++; this.speichern(); }
+      this.phase = this.runden > 0 && this.runden % RUNDEN_BIS_LANG === 0 ? 'lang' : 'kurz';
+    } else {
+      this.phase = 'arbeit';
+    }
+    this.rest = this.min[this.phase] * 60000;
+    this.anzeigen();
+  }
+
+  // ---------- Oberfläche ----------
+  $(sel) { return this.el.querySelector(sel); }
+
+  render() {
+    const k = KLASSE;
+    this.el.innerHTML = `<div class="${k.sunk} pomodoro-zeit" id="pm-zeit"></div>
+        <div class="${k.row}"><div class="${k.bar}"><i id="pm-balken"></i></div></div>
+        <div class="${k.row}"><b id="pm-phase"></b><span class="${k.muted}" id="pm-heute"></span></div>
+        <div class="${k.row}">
+          <button class="${k.btn}" id="pm-start"></button>
+          <button class="${k.btn}" id="pm-reset">Zurück</button>
+          <button class="${k.btn}" id="pm-skip">Weiter</button>
+        </div>
+        <fieldset><legend>Minuten</legend>
+          <div class="${k.row}">
+            <label>Arbeit <input type="number" min="1" max="120" id="pm-m-arbeit" value="${this.min.arbeit}"></label>
+            <label>Kurz <input type="number" min="1" max="60" id="pm-m-kurz" value="${this.min.kurz}"></label>
+            <label>Lang <input type="number" min="1" max="60" id="pm-m-lang" value="${this.min.lang}"></label>
+          </div>
+        </fieldset>`;
+
+    this.$('#pm-start').onclick = () => (this.laeuft ? this.pause() : this.start());
+    this.$('#pm-reset').onclick = () => this.reset();
+    this.$('#pm-skip').onclick = () => this.skip();
+    ['arbeit', 'kurz', 'lang'].forEach(name => {
+      this.$('#pm-m-' + name).onchange = e => this.dauerAendern(name, +e.target.value);
+    });
+    this.anzeigen();
+  }
+
+  dauerAendern(name, minuten) {
+    if (!minuten || minuten < 1) return;
+    this.min[name] = Math.min(120, Math.round(minuten));
+    this.speichern();
+    // laufende Phase nicht stören; im Stillstand sofort übernehmen
+    if (!this.laeuft && name === this.phase) this.rest = this.min[name] * 60000;
+    this.anzeigen();
+  }
+
+  anzeigen() {
+    const sek = Math.max(0, Math.ceil(this.rest / 1000));
+    const zeit = String(Math.floor(sek / 60)).padStart(2, '0') + ':' + String(sek % 60).padStart(2, '0');
+    const gesamt = this.min[this.phase] * 60000;
+    this.$('#pm-zeit').textContent = zeit;
+    this.$('#pm-balken').style.width = Math.round((1 - this.rest / gesamt) * 100) + '%';
+    this.$('#pm-phase').textContent = NAMEN[this.phase];
+    this.$('#pm-heute').textContent = 'Heute: ' + this.heute;
+    this.$('#pm-start').textContent = this.laeuft ? 'Pause' : 'Start';
+    document.title = this.laeuft ? `${zeit} · ${NAMEN[this.phase]}` : this.titelOriginal;
+  }
+
+  // ---------- Ton (Web Audio, keine Datei nötig) ----------
+  audioVorbereiten() {
+    // muss durch einen Klick ausgelöst werden, sonst blockt der Browser den Ton
+    try {
+      if (!this.audio) this.audio = new (window.AudioContext || window.webkitAudioContext)();
+      if (this.audio.state === 'suspended') this.audio.resume();
+    } catch (e) { /* kein Ton möglich */ }
+  }
+
+  piep() {
+    if (!this.audio) return;
+    try {
+      for (let i = 0; i < 3; i++) {
+        const o = this.audio.createOscillator();
+        const g = this.audio.createGain();
+        const t = this.audio.currentTime + i * 0.3;
+        o.frequency.value = 880;
+        g.gain.value = 0.1;
+        o.connect(g);
+        g.connect(this.audio.destination);
+        o.start(t);
+        o.stop(t + 0.15);
+      }
+    } catch (e) { /* ignorieren */ }
+  }
+
+  // ---------- Speicher (localStorage) ----------
+  laden() {
+    try {
+      const d = JSON.parse(localStorage.getItem(KEY));
+      if (!d) return;
+      if (d.min) this.min = { ...this.min, ...d.min };
+      if (d.tag === heuteTag()) this.heute = d.heute || 0;
+    } catch (e) { /* ignorieren */ }
+  }
+
+  speichern() {
+    try {
+      localStorage.setItem(KEY, JSON.stringify({ min: this.min, tag: heuteTag(), heute: this.heute }));
+    } catch (e) { /* ignorieren */ }
+  }
+}
+
+export default Pomodoro;   // damit "import Pomodoro from './pomodoro.js'" funktioniert
