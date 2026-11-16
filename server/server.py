@@ -7,6 +7,8 @@
 #   GET /api/state  liefert {"version", "updated", "state"} oder 404, wenn noch leer
 #   PUT /api/state  erwartet {"basis": <bekannte Version>, "stand": {...}}
 #                   Stimmt "basis" nicht mit der Serverversion überein: 409 (Konflikt)
+#   Genauso für weitere Datensätze unter /api/state/<name> (z. B. /api/state/ziele),
+#   jeder mit eigener Version und eigenen Backups.
 #
 #   GET/HEAD/PUT/DELETE /api/files/<name>   Dateien (PDF, PNG, JPG, WEBP), je bis 100 MB
 #
@@ -30,6 +32,7 @@ DATEI = os.path.join(DATEN, 'state.json')
 MAX_BYTES = 20 * 1024 * 1024           # Kartendaten
 MAX_DATEI = 100 * 1024 * 1024          # einzelne Datei (PDF, Bild)
 FILES = os.path.join(DATEN, 'files')
+STATE_RE = re.compile(r'^/api/state(?:/([a-z]{1,20}))?$')   # /api/state oder /api/state/<name>
 NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$')
 TYPEN = {'.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp'}
 sperre = threading.Lock()   # verhindert, dass zwei Anfragen gleichzeitig schreiben
@@ -38,30 +41,35 @@ os.makedirs(BACKUPS, exist_ok=True)
 os.makedirs(FILES, exist_ok=True)
 
 
-def lesen():
+def datei_fuer(name):
+    return os.path.join(DATEN, 'state-' + name + '.json') if name else DATEI
+
+
+def lesen(datei=DATEI):
     try:
-        with open(DATEI, encoding='utf-8') as f:
+        with open(datei, encoding='utf-8') as f:
             return json.load(f)
     except FileNotFoundError:
         return None
 
 
-def schreiben(obj):
-    tmp = DATEI + '.tmp'
+def schreiben(obj, datei=DATEI):
+    tmp = datei + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(obj, f, ensure_ascii=False)
-    os.replace(tmp, DATEI)   # atomar: entweder der alte oder der neue Stand, nie halb geschrieben
+    os.replace(tmp, datei)   # atomar: entweder der alte oder der neue Stand, nie halb geschrieben
 
 
-def sichern():
+def sichern(datei=DATEI, name=''):
+    p = name + '-' if name else ''   # eigene Backup-Namen je Datensatz
     jetzt = time.time()
-    tag = os.path.join(BACKUPS, 'tag-' + time.strftime('%Y%m%d') + '.json')
+    tag = os.path.join(BACKUPS, p + 'tag-' + time.strftime('%Y%m%d') + '.json')
     if not os.path.exists(tag):
-        shutil.copyfile(DATEI, tag)
-    laufend = sorted(f for f in os.listdir(BACKUPS) if f.startswith('stand-'))
+        shutil.copyfile(datei, tag)
+    laufend = sorted(f for f in os.listdir(BACKUPS) if f.startswith(p + 'stand-'))
     if not laufend or jetzt - os.path.getmtime(os.path.join(BACKUPS, laufend[-1])) > 600:
-        shutil.copyfile(DATEI, os.path.join(BACKUPS, 'stand-' + time.strftime('%Y%m%d-%H%M%S') + '.json'))
-    for prefix, behalten in (('stand-', 200), ('tag-', 90)):
+        shutil.copyfile(datei, os.path.join(BACKUPS, p + 'stand-' + time.strftime('%Y%m%d-%H%M%S') + '.json'))
+    for prefix, behalten in ((p + 'stand-', 200), (p + 'tag-', 90)):
         dateien = sorted(f for f in os.listdir(BACKUPS) if f.startswith(prefix))
         for name in dateien[:-behalten]:
             os.remove(os.path.join(BACKUPS, name))
@@ -88,8 +96,10 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def pfad_ok(self):
-        return self.path.split('?')[0] == '/api/state'
+    def state_name(self):
+        # None = ungültiger Pfad, '' = Hauptdatensatz (Karten), sonst Name des Datensatzes
+        m = STATE_RE.match(self.path.split('?')[0])
+        return None if not m else (m.group(1) or '')
 
     # ---------- Dateien (PDF, Bilder) ----------
     def datei_pfad(self):
@@ -181,10 +191,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith('/api/files/'):
             return self.datei_senden(True)
-        if not self.pfad_ok():
+        name = self.state_name()
+        if name is None:
             return self.antwort(404, {'fehler': 'unbekannt'})
         with sperre:
-            d = lesen()
+            d = lesen(datei_fuer(name))
         if d is None:
             return self.antwort(404, {'fehler': 'leer'})
         self.antwort(200, d)
@@ -192,8 +203,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):
         if self.path.startswith('/api/files/'):
             return self.datei_speichern()
-        if not self.pfad_ok():
+        name = self.state_name()
+        if name is None:
             return self.antwort(404, {'fehler': 'unbekannt'})
+        datei = datei_fuer(name)
         n = int(self.headers.get('Content-Length') or 0)
         if n <= 0 or n > MAX_BYTES:
             return self.antwort(413, {'fehler': 'Größe'})
@@ -205,14 +218,14 @@ class Handler(BaseHTTPRequestHandler):
                 or not isinstance(eingang.get('basis'), int)):
             return self.antwort(400, {'fehler': 'Format'})
         with sperre:
-            alt = lesen()
+            alt = lesen(datei)
             aktuell = alt['version'] if alt else 0
             if eingang['basis'] != aktuell:
                 return self.antwort(409, {'version': aktuell})
             if alt:
-                sichern()
+                sichern(datei, name)
             neu = {'version': aktuell + 1, 'updated': int(time.time()), 'state': eingang['stand']}
-            schreiben(neu)
+            schreiben(neu, datei)
         self.antwort(200, {'version': neu['version'], 'updated': neu['updated']})
 
 

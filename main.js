@@ -5,6 +5,8 @@ import Pomodoro   from './pomodoro.js';
 import Fenster    from './fenster.js';
 import Sync       from './sync.js';
 import Bilder     from './bilder.js';
+import Ziele from './ziele.js';
+
 
 const aufServer = location.hostname === 'desk.phonaro.de';   // Server-Funktionen nur dort
 
@@ -30,3 +32,15 @@ const skript = new Skript('#skript', {
   server: aufServer ? '/api/files/skript.pdf' : null
 });
 await skript.init();
+
+const ziele = new Ziele('#ziele', { karten: () => store.state.log[store.day()] || 0 }).init();
+if (aufServer) {
+  new Sync({
+    url: '/api/state/ziele',
+    ereignis: 'ziele:geaendert',
+    metaKey: 'phonaro-sync-ziele',
+    lesen: () => ziele.stand,
+    schreiben: stand => ziele.uebernehmen(stand),
+    beschreiben: stand => ziele.beschreibung(stand)
+  }).init();
+}

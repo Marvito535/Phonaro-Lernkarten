@@ -4,7 +4,9 @@
 //   lesen()           liefert den aktuellen Stand (JSON-fähiges Objekt)
 //   schreiben(stand)  übernimmt einen Stand vom Server in die App
 //   status            (optional) Selektor eines Elements für die Statusanzeige
-// Änderungen meldet die App per Event "karten:geaendert" auf document.
+// Änderungen meldet die App per Event auf document (Standard "karten:geaendert",
+// änderbar mit der Option ereignis). Mehrere Sync-Instanzen sind möglich, wenn jede
+// eine eigene url und einen eigenen metaKey hat.
 //
 // Regeln:
 //   - Lokal wird immer zuerst gespeichert. Der Server ist Sicherung und Abgleich.
@@ -14,11 +16,13 @@
 const META_KEY = 'phonaro-sync-meta';
 
 export class Sync {
-  constructor({ lesen, schreiben, url = '/api/state', status = null, verzoegerung = 2000, beschreiben } = {}) {
+  constructor({ lesen, schreiben, url = '/api/state', status = null, verzoegerung = 2000, beschreiben, ereignis = 'karten:geaendert', metaKey = META_KEY } = {}) {
     this.lesen = lesen;
     this.schreiben = schreiben;
     this.url = url;
     this.statusEl = status ? document.querySelector(status) : null;
+    this.ereignis = ereignis;   // Event auf document, das Änderungen meldet
+    this.metaKey = metaKey;     // eigener Speicherschlüssel je Datensatz
     this.verzoegerung = verzoegerung;   // Wartezeit nach der letzten Änderung, bevor gesendet wird
     this.beschreiben = beschreiben || (s => (s && Array.isArray(s.cards) ? s.cards.length + ' Karten' : 'Daten'));
     this.version = 0;          // zuletzt bekannte Serverversion
@@ -32,7 +36,7 @@ export class Sync {
   // ---------- Start ----------
   async init() {
     this.metaLaden();
-    document.addEventListener('karten:geaendert', () => { if (!this.ignorieren) this.geaendert(); });
+    document.addEventListener(this.ereignis, () => { if (!this.ignorieren) this.geaendert(); });
     window.addEventListener('online', () => this.abgleichen());
     document.addEventListener('visibilitychange', () => { if (document.hidden && this.dirty) this.senden(); });
     setInterval(() => { if (this.dirty) this.senden(); }, 60000);
@@ -142,13 +146,13 @@ export class Sync {
 
   metaLaden() {
     try {
-      const m = JSON.parse(localStorage.getItem(META_KEY));
+      const m = JSON.parse(localStorage.getItem(this.metaKey));
       if (m) { this.version = m.version || 0; this.dirty = !!m.dirty; }
     } catch (e) { /* ignorieren */ }
   }
 
   metaSpeichern() {
-    try { localStorage.setItem(META_KEY, JSON.stringify({ version: this.version, dirty: this.dirty })); } catch (e) { /* ignorieren */ }
+    try { localStorage.setItem(this.metaKey, JSON.stringify({ version: this.version, dirty: this.dirty })); } catch (e) { /* ignorieren */ }
   }
 }
 

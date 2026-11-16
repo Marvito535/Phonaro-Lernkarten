@@ -17,7 +17,7 @@ const KEY = 'phonaro-pomodoro';
 const NAMEN = { arbeit: 'Arbeiten', kurz: 'Kurze Pause', lang: 'Lange Pause' };
 const RUNDEN_BIS_LANG = 4;   // nach 4 Arbeitsphasen kommt die lange Pause
 
-const heuteTag = () => new Date().toISOString().slice(0, 10);
+const heuteTag = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };   // lokales Datum
 
 export class Pomodoro {
   // optionen: { arbeit: 25, kurz: 5, lang: 15 }  (Minuten)
@@ -92,7 +92,10 @@ export class Pomodoro {
   // gezaehlt = true: Phase wurde zu Ende gebracht (zählt für die Statistik)
   naechstePhase(gezaehlt) {
     if (this.phase === 'arbeit') {
-      if (gezaehlt) { this.heute++; this.runden++; this.speichern(); }
+      if (gezaehlt) {
+        this.heute++; this.runden++; this.speichern();
+        document.dispatchEvent(new CustomEvent('pomodoro:fertig', { detail: { heute: this.heute } }));   // für andere Module (z. B. Ziele)
+      }
       this.phase = this.runden > 0 && this.runden % RUNDEN_BIS_LANG === 0 ? 'lang' : 'kurz';
     } else {
       this.phase = 'arbeit';
