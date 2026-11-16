@@ -157,6 +157,8 @@ input,select,textarea{
     width:100%
 }
 
+input[type=radio] { width: auto; box-shadow: none; }
+
 select{
     width:auto
 }
@@ -273,6 +275,11 @@ fieldset{
 
 .textLayer .endOfContent        { display: block; position: absolute; inset: 100% 0 0; z-index: -1; cursor: default; user-select: none; }
 .textLayer .endOfContent.active { top: 0; }
+
+.skript-auswahl { position: absolute; inset: 0; z-index: 5; cursor: crosshair; touch-action: none; }
+.skript-rahmen  { position: absolute; border: 2px dashed var(--g); background: rgba(0, 166, 81, 0.15); pointer-events: none; }
+.skript-auswahl.hide, .skript-rahmen.hide { display: none; }
+.kartenbild     { max-width: 100%; max-height: 220px; margin: 6px auto; display: block; }
 
 .pomodoro-zeit { 
     font-size: 42px; 

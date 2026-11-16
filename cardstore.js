@@ -76,11 +76,17 @@
   } // Ende der answerCard-Methode
 
 // addCard: Parameter seite ergänzen und im Objekt speichern
-addCard(topic, q, a, seite = null) {
+addCard(topic, q, a, seite = null,bild = {}) {
   this.state.cards.push({
     id: this.createId(), topic: topic || 'Allgemein', q, a,
+
+    
     seite: seite || null,   // Skriptseite (optional)
+    qBild: bild.q || null,   // Bild bei der Frage
+    aBild: bild.a || null,    // Bild bei der Antwort
     box: 1, due: 0
+    
+ 
   });
   this.save();
 }
@@ -109,7 +115,11 @@ setSeite(cardId, seite) {
           q: c.q, // Übernehmen der Frage
           a: c.a, // Übernehmen der Antwort
           box: c.box || 1, // Übernehmen des Fachs oder Start in Fach 1
-          due: c.due || 0 // Übernehmen der Fälligkeit oder sofort fällig
+          due: c.due || 0, // Übernehmen der Fälligkeit oder sofort fällig
+          seite: c.seite || null,
+
+          qBild: c.qBild || null,
+          aBild: c.aBild || null
         })); // Ende des Map-Blocks für JSON
     } else { // Falls kein JSON vorliegt, wird tabellarischer/zeilenbasierter Text erwartet
       added = rawText // Verarbeiten des Rohtextes zeilenweise

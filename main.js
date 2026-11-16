@@ -4,13 +4,16 @@ import Skript     from './skript.js';
 import Pomodoro   from './pomodoro.js';
 import Fenster    from './fenster.js';
 import Sync       from './sync.js';
+import Bilder     from './bilder.js';
 
 const aufServer = location.hostname === 'desk.phonaro.de';   // Server-Funktionen nur dort
 
 const store = new CardStore();
-const app = new PhonaroApp(store);
+const bilder = await new Bilder({ server: aufServer ? '/api/files/' : null }).init();
+const app = new PhonaroApp(store, bilder);
 app.init();   // zuerst die Karten, damit sie nicht auf das Laden von pdf.js warten
 new Fenster().init();
+
 new Pomodoro('#pomodoro').init();
 
 // Karten-Abgleich mit dem Server (nicht in der lokalen Version)

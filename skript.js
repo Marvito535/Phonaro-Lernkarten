@@ -128,6 +128,7 @@ export class Skript {
         <button class="${k.btn}" id="sk-go">Gehe zu</button>
         <button class="${k.btn}" id="sk-minus">−</button>
         <button class="${k.btn}" id="sk-plus">+</button>
+        <button class="${k.btn}" id="sk-clip" title="Bereich auf der Seite aufziehen und als Bild übernehmen">Ausschnitt</button>
         <span class="${k.muted}">${esc(this.name)}</span>
       </div>
       <div class="${k.row}">
@@ -136,7 +137,7 @@ export class Skript {
         <span class="${k.muted}" id="sk-status"></span>
       </div>
       <div class="${k.sunk} skript-treffer ${k.hide}" id="sk-treffer"></div>
-      <div class="${k.sunk} skript-view"><div class="skript-seite"><canvas id="sk-canvas"></canvas><div class="textLayer" id="sk-text"></div></div></div>`
+      <div class="${k.sunk} skript-view"><div class="skript-seite"><canvas id="sk-canvas"></canvas><div class="textLayer" id="sk-text"></div><div class="skript-auswahl ${k.hide}" id="sk-auswahl"><div class="skript-rahmen ${k.hide}" id="sk-rahmen"></div></div></div></div>`
       : `<p class="${k.muted}">Lade dein Skript als PDF hoch. Es bleibt auf diesem Gerät gespeichert.</p>`}
     </fieldset>`;
 
@@ -149,6 +150,7 @@ export class Skript {
       this.$('#sk-go').onclick = () => this.goTo(+this.$('#sk-num').value || this.page);
       this.$('#sk-suchen').onclick = () => this.suchen(this.$('#sk-suche').value);
       this.$('#sk-suche').onkeydown = e => { if (e.key === 'Enter') this.suchen(e.target.value); };
+      this.$('#sk-clip').onclick = () => this.ausschnittModus(this.$('#sk-auswahl').classList.contains(KLASSE.hide));
       this.$('#sk-minus').onclick = () => { this.zoom = Math.max(0.5, this.zoom - 0.2); this.draw(); };
       this.$('#sk-plus').onclick = () => { this.zoom = Math.min(3, this.zoom + 0.2); this.draw(); };
       this.draw();
@@ -317,6 +319,66 @@ export class Skript {
     this.status(treffer.length
       ? `${treffer.length} Fundstellen auf ${seiten} Seite(n)`
       : 'Keine Treffer. Bei eingescannten PDFs ist keine Textsuche möglich.');
+  }
+
+  // ---------- Ausschnitt als Bild ----------
+  // Meldet das fertige Bild per Event "skript:ausschnitt" { blob, seite } an andere Module.
+  ausschnittModus(an) {
+    const ov = this.$('#sk-auswahl');
+    if (!ov) return;
+    ov.classList.toggle(KLASSE.hide, !an);
+    this.$('#sk-clip').classList.toggle('on', an);
+    this.status(an ? 'Ziehe einen Rahmen um den gewünschten Bereich.' : '');
+    if (!an) return;
+
+    const rahmen = this.$('#sk-rahmen');
+    const cv = this.$('#sk-canvas');
+    const grenze = (v, max) => Math.min(Math.max(v, 0), max);
+    let start = null;
+    let box = null;
+    const berechnen = e => {
+      const r = cv.getBoundingClientRect();
+      const x = grenze(e.clientX - r.left, r.width);
+      const y = grenze(e.clientY - r.top, r.height);
+      return { x: Math.min(start.x, x), y: Math.min(start.y, y), w: Math.abs(x - start.x), h: Math.abs(y - start.y) };
+    };
+    ov.onpointerdown = e => {
+      e.preventDefault();
+      ov.setPointerCapture(e.pointerId);
+      const r = cv.getBoundingClientRect();
+      start = { x: grenze(e.clientX - r.left, r.width), y: grenze(e.clientY - r.top, r.height) };
+      box = null;
+      rahmen.classList.remove(KLASSE.hide);
+    };
+    ov.onpointermove = e => {
+      if (!start) return;
+      box = berechnen(e);
+      Object.assign(rahmen.style, { left: box.x + 'px', top: box.y + 'px', width: box.w + 'px', height: box.h + 'px' });
+    };
+    ov.onpointerup = e => {
+      if (!start) return;
+      box = berechnen(e);
+      start = null;
+      rahmen.classList.add(KLASSE.hide);
+      if (box.w < 10 || box.h < 10) return this.status('Bereich zu klein, bitte erneut ziehen.');
+      this.ausschneiden(box);
+    };
+    ov.onpointercancel = () => { start = null; rahmen.classList.add(KLASSE.hide); };
+  }
+
+  ausschneiden(b) {
+    const cv = this.$('#sk-canvas');
+    const f = cv.width / cv.getBoundingClientRect().width;   // Bildschirm-Pixel → Canvas-Pixel (scharf bei Retina)
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(b.w * f));
+    c.height = Math.max(1, Math.round(b.h * f));
+    c.getContext('2d').drawImage(cv, b.x * f, b.y * f, b.w * f, b.h * f, 0, 0, c.width, c.height);
+    c.toBlob(blob => {
+      if (!blob) return this.status('Ausschnitt konnte nicht erstellt werden.');
+      document.dispatchEvent(new CustomEvent('skript:ausschnitt', { detail: { blob, seite: this.page } }));
+      this.ausschnittModus(false);
+      this.status('Ausschnitt übernommen.');
+    }, 'image/png');
   }
 
   // ---------- Seite zeichnen ----------

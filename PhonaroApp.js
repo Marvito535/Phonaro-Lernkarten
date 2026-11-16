@@ -1,5 +1,5 @@
   class PhonaroApp { // Export der Klasse PhonaroApp als ES-Modul
-  constructor(store) { // Konstruktor der Klasse, nimmt eine Store-Instanz entgegen
+  constructor(store, bilder) { // Konstruktor der Klasse, nimmt eine Store-Instanz entgegen
     this.store = store; // Speichert die Store-Instanz als Eigenschaft der App
     this.tab = 'lernen'; // Setzt den initialen aktiven Reiter auf 'lernen'
     this.topic = ''; // Initialisiert den Themen-Filter als leeren String (alle Themen)
@@ -7,6 +7,8 @@
     this.shown = false; // Initialisiert den Status, ob die Antwort einer Karte sichtbar ist (false)
     this.msg = ''; // Initialisiert eine leere Statusnachricht für Benachrichtigungen
     this.letzteSeite = null; // zuletzt im Skript angezeigte Seite (kommt per Event vom Skript-Modul)
+    this.bilder = bilder;
+    this.ausschnitt = null; // { blob, vorschau, seite }
   } // Ende des Konstruktors
 
   $(selector) { // Hilfsmethode zum einfacheren Selektieren von DOM-Elementen
@@ -27,7 +29,17 @@
     this.bindGlobalKeys(); // Registriert die globalen Tastatur-Shortcuts
     document.addEventListener('skript:seite', e => { this.letzteSeite = e.detail.seite; }); // merkt sich die aktuelle Skriptseite
     this.render(); // Führt das initiale Rendern der Benutzeroberfläche aus
+
+    document.addEventListener('skript:ausschnitt', e => { // Bildausschnitt aus dem Skript übernehmen
+    if (this.ausschnitt) URL.revokeObjectURL(this.ausschnitt.vorschau);
+    this.ausschnitt = { blob: e.detail.blob, vorschau: URL.createObjectURL(e.detail.blob), seite: e.detail.seite };
+    this.letzteSeite = e.detail.seite;
+    this.tab = 'karten';
+    this.render();
+});
   } // Ende der init-Methode
+
+  
 
   buildQueue() { // Methode zum Erstellen und Mischen der Lernkarten-Warteschlange
     this.queue = this.store.getDueCards(this.topic).sort(() => Math.random() - 0.5); // Holt fällige Karten für das Thema und mischt sie zufällig durch
@@ -110,11 +122,12 @@ handleAnswer(isCorrect) {
       html += `<div class="sunk card"><b>Alles erledigt!</b><br>Für heute ist nichts mehr fällig. Gut gemacht.<br><small>Neue Karten kannst du unter „Karten“ anlegen.</small></div>`; // Fügt eine Erfolgsmeldung hinzu, wenn alles gelernt wurde
     } else { // Wenn noch Karten fällig sind
       html += `
-        <div class="sunk card"> 
+          <div class="sunk card"> 
           <small>${this.esc(card.topic)} · Fach ${card.box} von 5</small> 
           <p>${this.esc(card.q)}</p> 
-          ${this.shown ? `<hr><p style="color:var(--gd)">${this.esc(card.a)}</p>` : ''} 
-        </div> 
+          ${card.qBild ? `<img class="kartenbild" data-bild="${card.qBild}" alt="">` : ''} 
+          ${this.shown ? `<hr><p style="color:var(--gd)">${this.esc(card.a)}</p>${card.aBild ? `<img class="kartenbild" data-bild="${card.aBild}" alt="">` : ''}` : ''} 
+        </div>
         <div class="row"> 
           ${this.shown // Bedingte Anzeige der Buttons je nach Aufdeckungsstatus
             ? `<button class="btn no" id="bn">Nicht gewusst (2)</button><button class="btn ok" id="by">Gewusst (1)</button>${card.seite ? `<button class="btn" id="bk">Im Skript nachschlagen (S. ${card.seite})</button>` : ''}` // Buttons nach dem Aufdecken der Antwort
@@ -123,6 +136,10 @@ handleAnswer(isCorrect) {
     } // Ende der If-Else-Bedingung für die Karte
 
     this.$('#main').innerHTML = html; // Schreibt den generierten HTML-Inhalt in den Hauptbereich der App
+
+      document.querySelectorAll('#main [data-bild]').forEach(img => {
+      this.bilder.url(img.dataset.bild).then(u => { if (u) img.src = u; });
+      });
 
     this.$('#tsel').onchange = e => { // Registriert einen Event-Listener für Änderungen im Themen-Dropdown
       this.topic = e.target.value; // Aktualisiert das ausgewählte Thema
@@ -154,11 +171,22 @@ handleAnswer(isCorrect) {
         <label>Antwort</label><textarea id="na" rows="2"></textarea> 
         <label>Skriptseite (optional)</label><input id="ns" type="number" min="1" value="${this.letzteSeite || ''}" placeholder="z. B. 12">
         <div class="row"><button class="btn ok" id="add">Karte hinzufügen</button><span class="muted">${this.esc(this.msg)}</span></div> 
+
+         ${this.ausschnitt ? `
+        <label>Bildausschnitt (S. ${this.ausschnitt.seite})</label>
+        <img src="${this.ausschnitt.vorschau}" alt="" style="max-width:100%;max-height:160px;display:block">
+        <div class="row">
+        <label><input type="radio" name="bildziel" value="q"> bei der Frage</label>
+        <label><input type="radio" name="bildziel" value="a" checked> bei der Antwort</label>
+        <button class="btn" id="bild-weg">Verwerfen</button>
+        </div>` : ''}
+
       </fieldset> 
       <div class="row">${this.renderTopicSelect()}<span class="muted">${list.length} Karten</span></div>
       <div class="sunk list">${list.map(c => ` 
         <div class="item"> 
           <div><b>${this.esc(c.q)}</b><br><span class="muted">${this.esc(c.a)}</span><br><small class="muted">${this.esc(c.topic)} · Fach ${c.box}${c.seite ? ' · S. ' + c.seite : ''}</small></div> 
+
           <button class="btn" data-s="${c.id}">Seite</button><button class="btn" data-d="${c.id}">Löschen</button> 
         </div>`).join('') || 'Noch keine Karten.'}
       </div>`; // Ende der Kartenliste
@@ -167,27 +195,26 @@ handleAnswer(isCorrect) {
       this.topic = e.target.value; // Aktualisiert das gefilterte Thema
       this.render(); // Rendert die Ansicht neu
     }; // Ende des onchange-Handlers
-    this.$('#add').onclick = () => { // Klick-Handler für den "Karte hinzufügen"-Button
-      const t = this.$('#nt').value.trim(); // Liest den Wert des Themen-Feldes aus und entfernt Leerzeichen
-      const q = this.$('#nq').value.trim(); // Liest den Wert des Frage-Feldes aus
-      const a = this.$('#na').value.trim(); // Liest den Wert des Antwort-Feldes aus
-      if (!q || !a) { // Validierung: Prüft, ob Frage oder Antwort leer sind
-        this.msg = 'Bitte Frage und Antwort ausfüllen.'; // Setzt eine Fehlermeldung
-        this.render(); // Rendert neu, um die Meldung anzuzeigen
-        return; // Bricht den Vorgang ab
-      } // Ende der Validierungsprüfung
-      this.store.addCard(t, q, a, parseInt(this.$('#ns').value, 10) || null); // Skriptseite ist optional
-      this.msg = 'Gespeichert.'; // Setzt eine Erfolgsmeldung
-      this.render(); // Rendert die Ansicht neu
-    }; // Ende des Add-Handlers
-    document.querySelectorAll('[data-d]').forEach(btn => { // Durchläuft alle Löschen-Buttons in der Liste
-      btn.onclick = () => { // Registriert einen Klick-Handler zum Löschen
-        if (confirm('Karte wirklich löschen?')) { // Zeigt einen Bestätigungsdialog vor dem Löschen
-          this.store.deleteCard(btn.dataset.d); // Löscht die Karte anhand ihrer ID aus dem Store
-          this.render(); // Rendert die Ansicht neu
-        } // Ende der Bestätigungsabfrage
-      }; // Ende des Klick-Handlers
-    }); // Ende der Schleife über die Löschen-Buttons
+
+
+  this.$('#add').onclick = async () => {
+  const t = this.$('#nt').value.trim();
+  const q = this.$('#nq').value.trim();
+  const a = this.$('#na').value.trim();
+  if (!q && !a && !this.ausschnitt) { this.msg = 'Bitte Frage und Antwort ausfüllen.'; this.render(); return; }
+  if (!q || (!a && !this.ausschnitt)) { this.msg = 'Bitte Frage und Antwort ausfüllen.'; this.render(); return; }
+  const bild = {};
+  if (this.ausschnitt) {
+    const ziel = (document.querySelector('input[name="bildziel"]:checked') || {}).value || 'a';
+    bild[ziel] = await this.bilder.speichern(this.ausschnitt.blob);
+    URL.revokeObjectURL(this.ausschnitt.vorschau);
+    this.ausschnitt = null;
+  }
+  this.store.addCard(t, q, a, parseInt(this.$('#ns').value, 10) || null, bild);
+  this.msg = 'Gespeichert.';
+  this.render();
+};
+if (this.$('#bild-weg')) this.$('#bild-weg').onclick = () => { URL.revokeObjectURL(this.ausschnitt.vorschau); this.ausschnitt = null; this.render(); };
   
     document.querySelectorAll('[data-s]').forEach(btn => { // Buttons zum Setzen oder Ändern der Skriptseite
   btn.onclick = () => {
@@ -198,7 +225,20 @@ handleAnswer(isCorrect) {
     this.render();
   };
 });
+
+
+document.querySelectorAll('[data-d]').forEach(btn => {
+  btn.onclick = () => {
+    if (!confirm('Karte wirklich löschen?')) return;
+    const c = this.store.state.cards.find(x => x.id === btn.dataset.d);
+    if (c) { this.bilder.loeschen(c.qBild); this.bilder.loeschen(c.aBild); }   // Bilder der Karte mitlöschen
+
+    this.store.deleteCard(btn.dataset.d);
+    this.render();
+  };
+});
   
+
   
   } 
   
@@ -230,8 +270,7 @@ handleAnswer(isCorrect) {
   renderDaten() {
     this.$('#main').innerHTML = ` 
       <fieldset><legend>Import</legend> 
-        <p>Eine Karte pro Zeile: <code>Thema;Frage;Antwort</code>, oder ändern zu <code>Thema;Frage;Antwort</code></p> 
-        <textarea id="imp" rows="4" placeholder="Thema;Frage;Antwort"></textarea>
+      <p>Eine Karte pro Zeile: <code>Thema;Frage;Antwort</code> (optional als vierte Spalte die Skriptseite, z. B. <code>…;12</code>), oder eine zuvor exportierte JSON-Liste einfügen.</p>        <textarea id="imp" rows="4" placeholder="Thema;Frage;Antwort"></textarea>
         <div class="row"><button class="btn ok" id="bi">Importieren</button><span class="muted">${this.esc(this.msg)}</span></div> 
       </fieldset> 
       <fieldset><legend>Export / Sicherung</legend>
