@@ -37,7 +37,10 @@ function ladeLib() {
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 export class Skript {
-  constructor(container) {
+  // optionen.server: Adresse zum Ablegen des PDFs auf dem Server, z. B. '/api/files/skript.pdf'.
+  // Ohne Angabe bleibt das PDF nur im Browser (wie bisher).
+  constructor(container, optionen = {}) {
+    this.server = optionen.server || null;
     this.el = typeof container === 'string' ? document.querySelector(container) : container;
     this.el.classList.add('skript');   // Haken für dein CSS
     this.pdf = null;
@@ -55,6 +58,7 @@ export class Skript {
     try { await ladeLib(); } catch (e) { return this.msg('pdf.js konnte nicht geladen werden (Internet nötig).'); }
     const gespeichert = await this.dbGet();
     if (gespeichert) await this.open(gespeichert.buf, gespeichert.name, this.getSeite());
+    if (this.server) await this.abgleichen(gespeichert);
     window.addEventListener('resize', () => this.draw());
     // Markieren beendet: Endmarke der Textebene wieder zurücksetzen
     const loslassen = () => {
@@ -63,6 +67,19 @@ export class Skript {
     };
     document.addEventListener('pointerup', loslassen);
     document.addEventListener('pointercancel', loslassen);
+    // Beim Kopieren aus dem Skript den Text aufräumen (z. B. µ → μ, Ligaturen, Silbentrennung)
+    document.addEventListener('copy', e => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !this.el.contains(sel.anchorNode)) return;   // nur Markierungen im Skript
+      const sauber = this.bereinigen(sel.toString());
+      e.clipboardData.setData('text/plain', sauber);
+      e.preventDefault();
+      // Zeichen aus privaten Unicode-Bereichen sind Formelschriften ohne Zuordnung: darauf hinweisen
+      const unlesbar = (sauber.match(/[\uE000-\uF8FF\uFFFD]/g) || []).length;
+      this.status(unlesbar
+        ? `Kopiert, aber ${unlesbar} Zeichen aus Formelschrift sind nicht lesbar.`
+        : 'Kopiert.');
+    });
     // Schnittstelle: andere Module (z. B. die Karten) sagen per Event, welche Seite gezeigt werden soll
     document.addEventListener('skript:gehezu', e => {
       this.goTo(e.detail.seite);
@@ -146,6 +163,7 @@ export class Skript {
     await this.dbSet({ name: datei.name, buf });
     this.setSeite(1);
     await this.open(buf, datei.name, 1);
+    if (this.server) await this.hochladen(buf, datei.name);
   }
 
   async open(buf, name, seite) {
@@ -171,6 +189,74 @@ export class Skript {
     await this.dbDel();
     this.setSeite(1);
     this.render();
+    if (this.server) {
+      try { await fetch(this.server, { method: 'DELETE' }); } catch (e) { /* offline: bleibt auf dem Server */ }
+    }
+  }
+
+  // ---------- Abgleich mit dem Server ----------
+  // Regeln: Der Server liefert pro Datei einen Zeitstempel (X-Updated). Der Browser merkt sich,
+  // welchen Stand er zuletzt hatte. Weicht der Server ab, gewinnt der Server.
+  // Hat dieser Browser ein PDF, das noch nie auf dem Server war, wird es hochgeladen.
+  async abgleichen(lokal) {
+    let r;
+    try { r = await fetch(this.server, { method: 'HEAD', cache: 'no-store' }); }
+    catch (e) { return this.msg('Server nicht erreichbar, nur lokal'); }
+
+    if (r.status === 404) {   // Server hat noch nichts
+      if (lokal) await this.hochladen(lokal.buf, lokal.name);
+      return;
+    }
+    if (!r.ok) return this.msg('Serverfehler ' + r.status);
+
+    const stand = +r.headers.get('X-Updated');
+    if (lokal && lokal.updated === stand) return this.msg('Mit Server abgeglichen');
+    if (lokal && !lokal.updated) return this.hochladen(lokal.buf, lokal.name);   // lokal neu, nie hochgeladen
+
+    this.msg('Lade Skript vom Server …');
+    try {
+      const g = await fetch(this.server, { cache: 'no-store' });
+      if (!g.ok) throw new Error();
+      const buf = await g.arrayBuffer();
+      const name = decodeURIComponent(g.headers.get('X-Dateiname') || 'skript.pdf');
+      await this.dbSet({ name, buf, updated: +g.headers.get('X-Updated') || stand });
+      await this.open(buf, name, this.getSeite());
+      this.msg('Vom Server geladen');
+    } catch (e) {
+      this.msg('Skript konnte nicht vom Server geladen werden');
+    }
+  }
+
+  async hochladen(buf, name) {
+    this.msg('Sichere Skript auf dem Server …');
+    try {
+      const r = await fetch(this.server, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/pdf', 'X-Dateiname': encodeURIComponent(name) },
+        body: buf
+      });
+      if (!r.ok) throw new Error();
+      const d = await r.json();
+      await this.dbSet({ name, buf, updated: d.updated });   // Serverstand merken
+      this.msg('Auf dem Server gesichert');
+    } catch (e) {
+      this.msg('Server-Sicherung fehlgeschlagen (wird beim nächsten Start erneut versucht)');
+    }
+  }
+
+  // ---------- Kopierten Text aufräumen ----------
+  // Ersetzt nur Zeichen, bei denen die Bedeutung eindeutig ist
+  bereinigen(text) {
+    return text
+      .replace(/\u00B5/g, '\u03BC')                 // Mikro-Zeichen → griechisches μ (Mittelwert)
+      .replace(/\u2126/g, '\u03A9')                 // Ohm-Zeichen → Ω
+      .replace(/\uFB00/g, 'ff').replace(/\uFB01/g, 'fi').replace(/\uFB02/g, 'fl')
+      .replace(/\uFB03/g, 'ffi').replace(/\uFB04/g, 'ffl')   // Ligaturen auflösen
+      .replace(/[\u00AD\u200B\u200C\u200D\uFEFF]/g, '')      // unsichtbare Zeichen entfernen
+      .replace(/\u00A0/g, ' ')                      // geschütztes Leerzeichen → normales
+      .replace(/(\p{L})-\n(\p{Ll})/gu, '$1$2')      // Silbentrennung am Zeilenende zusammenfügen
+      .replace(/[ \t]+\n/g, '\n')                   // Leerzeichen am Zeilenende entfernen
+      .normalize('NFC');                            // zusammengesetzte Zeichen vereinheitlichen
   }
 
   // ---------- Volltextsuche ----------
