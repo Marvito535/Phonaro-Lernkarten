@@ -37,9 +37,21 @@ export class Pomodoro {
 
   // ---------- Start ----------
   init() {
-    this.laden();
+    const zustand = this.laden();
     this.rest = this.min[this.phase] * 60000;
+    if (zustand && typeof zustand.rest === 'number' && zustand.rest > 0) this.rest = zustand.rest;
     this.render();
+    // Der Timer lief, als die Seite geschlossen oder neu geladen wurde: weiterlaufen lassen
+    if (zustand && zustand.ende) {
+      if (zustand.ende > Date.now()) {
+        this.rest = zustand.ende - Date.now();
+        this.ende = zustand.ende;
+        this.timer = setInterval(() => this.tick(), 250);
+        this.anzeigen();
+      } else {
+        this.naechstePhase(true);   // die Phase ist in der Zwischenzeit abgelaufen (zählt)
+      }
+    }
     return this;
   }
 
@@ -51,6 +63,7 @@ export class Pomodoro {
     this.audioVorbereiten();
     this.ende = Date.now() + this.rest;
     this.timer = setInterval(() => this.tick(), 250);
+    this.speichern();
     this.anzeigen();
   }
 
@@ -59,12 +72,14 @@ export class Pomodoro {
     this.rest = Math.max(0, this.ende - Date.now());
     this.ende = null;
     clearInterval(this.timer);
+    this.speichern();
     this.anzeigen();
   }
 
   reset() {
     this.pause();
     this.rest = this.min[this.phase] * 60000;
+    this.speichern();
     this.anzeigen();
   }
 
@@ -101,6 +116,7 @@ export class Pomodoro {
       this.phase = 'arbeit';
     }
     this.rest = this.min[this.phase] * 60000;
+    this.speichern();
     this.anzeigen();
   }
 
@@ -140,6 +156,7 @@ export class Pomodoro {
     this.speichern();
     // laufende Phase nicht stören; im Stillstand sofort übernehmen
     if (!this.laeuft && name === this.phase) this.rest = this.min[name] * 60000;
+    this.speichern();
     this.anzeigen();
   }
 
@@ -182,18 +199,28 @@ export class Pomodoro {
   }
 
   // ---------- Speicher (localStorage) ----------
+  // Gespeichert wird auch der Zustand des Timers. "ende" ist ein fester Zeitpunkt,
+  // deshalb stimmt die Restzeit nach einem Neuladen, egal wie lange die Seite zu war.
   laden() {
     try {
       const d = JSON.parse(localStorage.getItem(KEY));
-      if (!d) return;
+      if (!d) return null;
       if (d.min) this.min = { ...this.min, ...d.min };
-      if (d.tag === heuteTag()) this.heute = d.heute || 0;
-    } catch (e) { /* ignorieren */ }
+      if (d.tag === heuteTag()) { this.heute = d.heute || 0; }
+      if (NAMEN[d.phase]) this.phase = d.phase;
+      this.runden = d.runden || 0;
+      return { rest: d.rest, ende: d.ende || null };
+    } catch (e) { return null; }
   }
 
   speichern() {
     try {
-      localStorage.setItem(KEY, JSON.stringify({ min: this.min, tag: heuteTag(), heute: this.heute }));
+      localStorage.setItem(KEY, JSON.stringify({
+        min: this.min, tag: heuteTag(), heute: this.heute,
+        phase: this.phase, runden: this.runden,
+        rest: this.laeuft ? Math.max(0, this.ende - Date.now()) : this.rest,
+        ende: this.ende
+      }));
     } catch (e) { /* ignorieren */ }
   }
 }
