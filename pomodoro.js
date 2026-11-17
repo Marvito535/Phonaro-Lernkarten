@@ -83,6 +83,17 @@ export class Pomodoro {
     this.anzeigen();
   }
 
+  // Zyklus von vorn: Runde 1, Arbeitsphase, volle Zeit. Die Zahl "heute" bleibt.
+  neu() {
+    if (this.laeuft && !confirm('Der Timer läuft. Wirklich von vorn beginnen?')) return;
+    this.pause();
+    this.phase = 'arbeit';
+    this.runden = 0;
+    this.rest = this.min.arbeit * 60000;
+    this.speichern();
+    this.anzeigen();
+  }
+
   skip() {
     this.pause();
     this.naechstePhase(false);
@@ -128,10 +139,12 @@ export class Pomodoro {
     this.el.innerHTML = `<div class="${k.sunk} pomodoro-zeit" id="pm-zeit"></div>
         <div class="${k.row}"><div class="${k.bar}"><i id="pm-balken"></i></div></div>
         <div class="${k.row}"><b id="pm-phase"></b><span class="${k.muted}" id="pm-heute"></span></div>
+        <div class="${k.sunk}"><div id="pm-zyklus"></div><div class="${k.muted}" id="pm-danach"></div></div>
         <div class="${k.row}">
           <button class="${k.btn}" id="pm-start"></button>
           <button class="${k.btn}" id="pm-reset">Zurück</button>
-          <button class="${k.btn}" id="pm-skip">Weiter</button>
+          <button class="${k.btn}" id="pm-neu" title="Zyklus von vorn beginnen: Runde 1, volle Arbeitszeit. Die Pomodoros von heute bleiben erhalten.">Neu</button>
+          <button class="${k.btn}" id="pm-skip" title="Phase überspringen. Eine übersprungene Arbeitsphase zählt nicht als Pomodoro.">Weiter</button>
         </div>
         <fieldset><legend>Minuten</legend>
           <div class="${k.row}">
@@ -144,6 +157,7 @@ export class Pomodoro {
     this.$('#pm-start').onclick = () => (this.laeuft ? this.pause() : this.start());
     this.$('#pm-reset').onclick = () => this.reset();
     this.$('#pm-skip').onclick = () => this.skip();
+    this.$('#pm-neu').onclick = () => this.neu();
     ['arbeit', 'kurz', 'lang'].forEach(name => {
       this.$('#pm-m-' + name).onchange = e => this.dauerAendern(name, +e.target.value);
     });
@@ -168,8 +182,33 @@ export class Pomodoro {
     this.$('#pm-balken').style.width = Math.round((1 - this.rest / gesamt) * 100) + '%';
     this.$('#pm-phase').textContent = NAMEN[this.phase];
     this.$('#pm-heute').textContent = 'Heute: ' + this.heute;
+    this.zyklusZeigen();
     this.$('#pm-start').textContent = this.laeuft ? 'Pause' : 'Start';
     document.title = this.laeuft ? `${zeit} · ${NAMEN[this.phase]}` : this.titelOriginal;
+  }
+
+  // Leiste mit den 4 Arbeitsrunden bis zur langen Pause: ■ geschafft, ▶ jetzt, □ kommt noch
+  zyklusZeigen() {
+    const imZyklus = this.runden % RUNDEN_BIS_LANG;   // geschaffte Runden in diesem Zyklus
+    const lang = this.phase === 'lang';
+    let leiste = '';
+    for (let i = 0; i < RUNDEN_BIS_LANG; i++) {
+      const jetzt = this.phase === 'arbeit' && i === imZyklus;
+      const fertig = lang || i < imZyklus;
+      leiste += jetzt ? '<b>▶</b> ' : (fertig ? '■ ' : '□ ');
+    }
+    leiste += lang ? '<b>⏸ lange Pause</b>' : '→ lange Pause';
+    this.$('#pm-zyklus').innerHTML = leiste;
+
+    let danach;
+    if (this.phase === 'arbeit') {
+      const lange = (imZyklus + 1) === RUNDEN_BIS_LANG;
+      danach = 'Nach Ablauf: ' + (lange ? 'LANGE Pause (' + this.min.lang + ' Min.)' : 'kurze Pause (' + this.min.kurz + ' Min.)')
+        + ' · Runde ' + (imZyklus + 1) + ' von ' + RUNDEN_BIS_LANG;
+    } else {
+      danach = 'Danach: Arbeiten (' + this.min.arbeit + ' Min.) · Runde ' + (lang ? 1 : imZyklus + 1) + ' von ' + RUNDEN_BIS_LANG;
+    }
+    this.$('#pm-danach').textContent = danach;
   }
 
   // ---------- Ton (Web Audio, keine Datei nötig) ----------
