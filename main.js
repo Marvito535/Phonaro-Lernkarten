@@ -16,6 +16,18 @@ const app = new PhonaroApp(store, bilder);
 app.init();   // zuerst die Karten, damit sie nicht auf das Laden von pdf.js warten
 new Fenster().init();
 
+const ziele = new Ziele('#ziele', { karten: () => store.state.log[store.day()] || 0 }).init();
+if (aufServer) {
+  new Sync({
+    url: '/api/state/ziele',
+    ereignis: 'ziele:geaendert',
+    metaKey: 'phonaro-sync-ziele',
+    lesen: () => ziele.stand,
+    schreiben: stand => ziele.uebernehmen(stand),
+    beschreiben: stand => ziele.beschreibung(stand)
+  }).init();
+}
+
 new Pomodoro('#pomodoro').init();
 
 // Karten-Abgleich mit dem Server (nicht in der lokalen Version)
@@ -33,14 +45,3 @@ const skript = new Skript('#skript', {
 });
 await skript.init();
 
-const ziele = new Ziele('#ziele', { karten: () => store.state.log[store.day()] || 0 }).init();
-if (aufServer) {
-  new Sync({
-    url: '/api/state/ziele',
-    ereignis: 'ziele:geaendert',
-    metaKey: 'phonaro-sync-ziele',
-    lesen: () => ziele.stand,
-    schreiben: stand => ziele.uebernehmen(stand),
-    beschreiben: stand => ziele.beschreibung(stand)
-  }).init();
-}
