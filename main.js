@@ -16,7 +16,7 @@ const app = new PhonaroApp(store, bilder);
 app.init();   // zuerst die Karten, damit sie nicht auf das Laden von pdf.js warten
 new Fenster().init();
 
-const ziele = new Ziele('#ziele', { karten: () => store.state.log[store.day()] || 0 }).init();
+const ziele = new Ziele('#ziele', { karten: () => store.state.log[store.day()] || 0, anrufquelle: aufServer ? '/api/anrufe' : null }).init();
 if (aufServer) {
   new Sync({
     url: '/api/state/ziele',

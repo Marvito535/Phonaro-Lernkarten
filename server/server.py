@@ -10,6 +10,9 @@
 #   Genauso für weitere Datensätze unter /api/state/<name> (z. B. /api/state/ziele),
 #   jeder mit eigener Version und eigenen Backups.
 #
+#   GET /api/anrufe   Anrufzähler pro Tag aus dem Portunity-Einzelverbindungsnachweis (nur lesen)
+#                     Zugangsdaten kommen aus Umgebungsvariablen (PORTUNITY_LOGIN, PORTUNITY_CODE)
+#
 #   GET/HEAD/PUT/DELETE /api/files/<name>   Dateien (PDF, PNG, JPG, WEBP), je bis 100 MB
 #
 # Vor jedem Überschreiben bleibt der alte Stand als Backup erhalten:
@@ -23,6 +26,7 @@ import shutil
 import threading
 import time
 import urllib.parse
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST, PORT = '127.0.0.1', 8787
@@ -35,6 +39,14 @@ FILES = os.path.join(DATEN, 'files')
 STATE_RE = re.compile(r'^/api/state(?:/([a-z]{1,20}))?$')   # /api/state oder /api/state/<name>
 NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$')
 TYPEN = {'.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp'}
+PORTUNITY_URL = os.environ.get('PORTUNITY_URL', 'https://wr.ispsuite.portunity.de/webrequests/product-voip/')
+PORTUNITY_LOGIN = os.environ.get('PORTUNITY_LOGIN', '')
+PORTUNITY_CODE = os.environ.get('PORTUNITY_CODE', '')
+ANRUFE_DATEI = os.path.join(DATEN, 'anrufe.json')
+ANRUFE_PAUSE = 120   # frühestens alle 2 Minuten bei Portunity nachfragen (und nur, wenn die App gerade abfragt)
+ZEIT_RE = re.compile(r'(\d{4}-\d{2}-\d{2})[ T]\d{2}:\d{2}:\d{2}')
+anrufe_stand = {'zeit': 0, 'fehler': None}
+anrufe_sperre = threading.Lock()
 sperre = threading.Lock()   # verhindert, dass zwei Anfragen gleichzeitig schreiben
 
 os.makedirs(BACKUPS, exist_ok=True)
@@ -82,6 +94,88 @@ def sichern_datei(pfad, praefix):
     alte = sorted(f for f in os.listdir(BACKUPS) if f.startswith(praefix))
     for name in alte[:-10]:
         os.remove(os.path.join(BACKUPS, name))
+
+
+# ---------- Portunity (nur lesend: Befehl "Connections") ----------
+def portunity_abfragen(zeitraum):
+    # POST statt GET, damit das Passwort nicht in einer URL (und in Logs) steht
+    daten = urllib.parse.urlencode({
+        'sProductLogin': PORTUNITY_LOGIN, 'sProductCode': PORTUNITY_CODE,
+        'sCommand': 'Connections', 'sCommandPeriod': zeitraum
+    }).encode('latin-1')
+    with urllib.request.urlopen(urllib.request.Request(PORTUNITY_URL, data=daten), timeout=15) as r:
+        text = r.read(2_000_000).decode('latin-1')   # die ISPSuite antwortet in ISO-8859-1
+    werte, verbindungen = {}, []
+    for zeile in text.splitlines():
+        if ':' not in zeile:
+            continue
+        k, v = zeile.split(':', 1)
+        k, v = k.strip(), v.strip()
+        if k.startswith('Connection_'):
+            verbindungen.append(v)
+        else:
+            werte[k] = v
+    return werte, verbindungen
+
+
+def tag_heute():
+    try:
+        from zoneinfo import ZoneInfo
+        from datetime import datetime
+        return datetime.now(ZoneInfo('Europe/Berlin')).strftime('%Y-%m-%d')
+    except Exception:
+        return time.strftime('%Y-%m-%d')
+
+
+def anrufe_lesen():
+    try:
+        with open(ANRUFE_DATEI, encoding='utf-8') as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def anrufe_aktualisieren():
+    # liefert (Tageszähler, Fehlertext oder None); fragt höchstens alle ANRUFE_PAUSE Sekunden nach
+    with anrufe_sperre:
+        tage = anrufe_lesen()
+        if not PORTUNITY_LOGIN or not PORTUNITY_CODE:
+            return tage, 'Portunity nicht eingerichtet'
+        if time.time() - anrufe_stand['zeit'] < ANRUFE_PAUSE:
+            return tage, anrufe_stand['fehler']
+        anrufe_stand['zeit'] = time.time()
+        try:
+            for zeitraum in ('Yesterday', 'Today'):
+                werte, verbindungen = portunity_abfragen(zeitraum)
+                if werte.get('WR_Status', '').lower() != 'ok':
+                    raise RuntimeError(werte.get('WR_Comment') or 'Portunity: ' + werte.get('WR_Status', 'keine Antwort'))
+                zaehler = {}
+                for v in verbindungen:
+                    m = ZEIT_RE.search(v)   # Datum aus der Zeile; Spaltenreihenfolge ist egal
+                    tag = m.group(1) if m else (tag_heute() if zeitraum == 'Today' else None)
+                    if tag:
+                        zaehler[tag] = zaehler.get(tag, 0) + 1
+                if zeitraum == 'Today' and tag_heute() not in zaehler:
+                    zaehler[tag_heute()] = 0
+                tage.update(zaehler)
+            grenze = time.strftime('%Y-%m-%d', time.localtime(time.time() - 120 * 86400))
+            tage = {t: n for t, n in tage.items() if t >= grenze}
+            tmp = ANRUFE_DATEI + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(tage, f)
+            os.replace(tmp, ANRUFE_DATEI)
+            anrufe_stand['fehler'] = None
+        except Exception as e:   # Netz, Passwort, Format: Fehler melden, alten Stand behalten
+            anrufe_stand['fehler'] = 'Portunity nicht erreichbar' if isinstance(e, OSError) else str(e)[:120]
+        return tage, anrufe_stand['fehler']
+
+
+def anrufe_roh():
+    # Diagnose: Aufbau der Antwort zeigen, Rufnummern (lange Ziffernfolgen) unkenntlich gemacht
+    werte, verbindungen = portunity_abfragen('Today')
+    maske = lambda t: re.sub(r'\d{6,}', lambda m: '#' * len(m.group()), t)
+    return {'felder': {k: maske(v) for k, v in werte.items()}, 'anzahl': len(verbindungen),
+            'beispiele': [maske(v) for v in verbindungen[:3]]}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -188,7 +282,21 @@ class Handler(BaseHTTPRequestHandler):
             return self.datei_loeschen()
         self.antwort(404, {'fehler': 'unbekannt'})
 
+    def anrufe_antwort(self):
+        abfrage = urllib.parse.urlparse(self.path).query
+        if 'roh=1' in abfrage:
+            if not PORTUNITY_LOGIN or not PORTUNITY_CODE:
+                return self.antwort(200, {'fehler': 'Portunity nicht eingerichtet'})
+            try:
+                return self.antwort(200, anrufe_roh())
+            except Exception as e:
+                return self.antwort(200, {'fehler': 'Abfrage fehlgeschlagen: ' + type(e).__name__})
+        tage, fehler = anrufe_aktualisieren()
+        self.antwort(200, {'tage': tage, 'aktualisiert': int(anrufe_stand['zeit']), 'fehler': fehler})
+
     def do_GET(self):
+        if self.path.split('?')[0] == '/api/anrufe':
+            return self.anrufe_antwort()
         if self.path.startswith('/api/files/'):
             return self.datei_senden(True)
         name = self.state_name()

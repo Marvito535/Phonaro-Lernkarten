@@ -10,6 +10,7 @@
 //
 // Zählt Pomodoros über das Event "pomodoro:fertig" (kommt von pomodoro.js).
 // Der Kartenzähler ist optional: ohne "karten" fehlt nur diese Zeile.
+// Anrufzähler automatisch: { anrufquelle: '/api/anrufe' } (Server liefert { tage: {datum: zahl}, fehler }).
 
 const KLASSE = {
   btn: 'btn',      // Win98-Button
@@ -27,7 +28,9 @@ const STANDARD = {
   woche: 40,              // Pomodoros pro Woche (Mo–So)
   karten: 30,             // Karten pro Tag
   pruefung: '2026-11-29', // Prüfungsdatum (leer = aus)
-  name: 'Statistik-Klausur'
+  name: 'Statistik-Klausur',
+  akquise: 5,             // Stunden Kaltakquise pro Tag (0 = Anrufziel aus)
+  quote: 20               // geplante Anrufversuche pro Stunde (Richtwert, bitte an dich anpassen)
 };
 
 const datum = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -39,8 +42,12 @@ export class Ziele {
     this.el = typeof container === 'string' ? document.querySelector(container) : container;
     this.el.classList.add('ziele');           // Haken für dein CSS
     this.karten = optionen.karten || null;    // optional: () => Zahl
+    this.quelle = optionen.anrufquelle || null;   // optional: Adresse, die Anrufzahlen pro Tag liefert
+    this.auto = {};                           // Zahlen aus der Quelle (werden nicht mit dem Server synchronisiert)
+    this.quelleText = '';                     // Statuszeile zur Quelle
     this.ziel = { ...STANDARD, ...(optionen.ziel || {}) };
     this.tage = {};                           // 'JJJJ-MM-TT' → Anzahl Pomodoros
+    this.anrufe = {};                         // 'JJJJ-MM-TT' → Anzahl Anrufversuche
     this.einstellen = false;                  // Einstellungen sichtbar?
   }
 
@@ -49,26 +56,36 @@ export class Ziele {
     this.laden();
     document.addEventListener('pomodoro:fertig', () => this.zaehlen(1));
     document.addEventListener('karten:geaendert', () => { if (!this.einstellen) this.render(); });
-    document.addEventListener('visibilitychange', () => { if (!document.hidden && !this.einstellen) this.render(); });   // Tageswechsel
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) return;
+      if (this.quelle) this.quelleHolen();
+      if (!this.einstellen) this.render();
+    });   // Tageswechsel
     this.render();
+    if (this.quelle) {
+      this.quelleHolen();
+      setInterval(() => { if (!document.hidden) this.quelleHolen(); }, 5 * 60000);
+    }
     return this;
   }
 
   // ---------- von außen nutzbar ----------
   // Für den Abgleich (sync.js): kompletter Stand lesen / vom Server übernehmen
-  get stand() { return { ziel: this.ziel, tage: this.tage }; }
+  get stand() { return { ziel: this.ziel, tage: this.tage, anrufe: this.anrufe }; }
 
   uebernehmen(stand) {
     if (!stand) return;
     this.ziel = { ...STANDARD, ...(stand.ziel || {}) };
     this.tage = stand.tage || {};
+    this.anrufe = stand.anrufe || {};
     this.speichern(false);   // lokal sichern, aber nicht erneut als Änderung melden
     this.render();
   }
 
   beschreibung(stand) {
     const t = stand && stand.tage ? stand.tage[heuteTag()] || 0 : 0;
-    return 'heute ' + t + ' Pomodoros';
+    const a = stand && stand.anrufe ? stand.anrufe[heuteTag()] || 0 : 0;
+    return 'heute ' + t + ' Pomodoros, ' + a + ' Anrufe';
   }
 
   zaehlen(n = 1) {
@@ -77,6 +94,37 @@ export class Ziele {
     this.speichern();
     if (!this.einstellen) this.render();
   }
+
+  // Anrufversuche: von Hand (+1/−1) oder später automatisch aus der Telefonanlage
+  // Handzählung baut auf dem angezeigten Wert auf, damit +1 auch nach einer Übernahme aus der Telefonanlage stimmt
+  anruf(n = 1) { this.setAnrufe(heuteTag(), this.anrufHeute + n); }
+
+  setAnrufe(tag, n) {
+    this.anrufe[tag] = Math.max(0, Math.round(n) || 0);
+    this.speichern();
+    if (!this.einstellen) this.render();
+  }
+
+  // Zahl für heute: der höhere Wert aus Handzählung und Telefonanlage (so wird nichts doppelt gezählt)
+  get anrufHeute() { return Math.max(this.anrufe[heuteTag()] || 0, this.auto[heuteTag()] || 0); }
+
+  async quelleHolen() {
+    try {
+      const r = await fetch(this.quelle, { cache: 'no-store' });
+      if (!r.ok) throw new Error('Status ' + r.status);
+      const d = await r.json();
+      if (d.tage) { this.auto = d.tage; this.speichern(false); }
+      this.quelleText = d.fehler
+        ? 'Telefonanlage: ' + d.fehler
+        : 'Telefonanlage: ' + (this.auto[heuteTag()] || 0) + ' heute, Stand ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+    } catch (e) {
+      this.quelleText = 'Telefonanlage: nicht erreichbar';
+    }
+    if (!this.einstellen) this.render();
+  }
+
+  // Anrufziel = geplante Stunden Kaltakquise × Anrufe pro Stunde
+  get anrufZiel() { return Math.round(this.ziel.akquise * this.ziel.quote); }
 
   get heute() { return this.tage[heuteTag()] || 0; }
 
@@ -129,15 +177,25 @@ export class Ziele {
         ${z.pruefung ? `<div class="${k.sunk}"><b>${this.pruefungsText()}</b></div>` : ''}
         ${this.zeile('Pomodoros heute', this.heute, z.tag)}
         ${this.zeile('Pomodoros diese Woche', this.woche, z.woche)}
+        ${z.akquise > 0 ? this.zeile(`Anrufversuche heute (${z.akquise} Std.)`, this.anrufHeute, this.anrufZiel) : ''}
         ${kartenHeute !== null ? this.zeile('Karten heute', kartenHeute, z.karten) : ''}
+        ${this.quelle && this.quelleText && z.akquise > 0 ? `<div class="${k.row}"><span class="${k.muted}">${this.esc(this.quelleText)}</span></div>` : ''}
         <div class="${k.row}"><span class="${k.muted}">${this.nachricht()}</span></div>
         <div class="${k.row}">
-          <button class="${k.btn}" id="zl-plus" title="Einen Pomodoro nachtragen">+1</button>
+          <button class="${k.btn}" id="zl-plus" title="Einen Pomodoro nachtragen">+1 Pomodoro</button>
           <button class="${k.btn}" id="zl-minus" title="Einen Pomodoro abziehen">−1</button>
+        </div>
+        <div class="${k.row}">
+          ${z.akquise > 0 ? `<button class="${k.btn}" id="zl-anruf" title="Einen Anrufversuch zählen">+1 Anruf</button>
+          <button class="${k.btn}" id="zl-anruf-minus" title="Einen Anrufversuch abziehen">−1</button>` : ''}
           <button class="${k.btn}" id="zl-edit">Ziele ändern</button>
         </div>`;
     this.$('#zl-plus').onclick = () => this.zaehlen(1);
     this.$('#zl-minus').onclick = () => this.zaehlen(-1);
+    if (this.$('#zl-anruf')) {
+      this.$('#zl-anruf').onclick = () => this.anruf(1);
+      this.$('#zl-anruf-minus').onclick = () => this.anruf(-1);
+    }
     this.$('#zl-edit').onclick = () => { this.einstellen = true; this.render(); };
   }
 
@@ -149,6 +207,11 @@ export class Ziele {
             <label>pro Woche <input type="number" min="1" max="200" id="zl-woche" value="${z.woche}"></label>
             <label>Karten pro Tag <input type="number" min="1" max="500" id="zl-karten" value="${z.karten}"></label>
           </div>
+          <div class="${k.row}">
+            <label>Kaltakquise Std./Tag <input type="number" min="0" max="12" step="0.5" id="zl-akquise" value="${z.akquise}"></label>
+            <label>Anrufe pro Std. <input type="number" min="1" max="120" id="zl-quote" value="${z.quote}"></label>
+          </div>
+          <div class="${k.muted}">Anrufziel pro Tag: <b id="zl-anrufziel">${this.anrufZiel}</b></div>
           <label>Prüfung (Name)</label><input id="zl-name" value="${this.esc(z.name)}">
           <label>Prüfungsdatum (leer = aus)</label><input type="date" id="zl-pruefung" value="${this.esc(z.pruefung)}">
         </fieldset>
@@ -157,7 +220,13 @@ export class Ziele {
           <button class="${k.btn}" id="zl-cancel">Abbrechen</button>
         </div>`;
     const zahl = (id, min, max, alt) => { const v = Math.round(+this.$(id).value); return v >= min && v <= max ? v : alt; };
+    const vorschau = () => { this.$('#zl-anrufziel').textContent = Math.round((+this.$('#zl-akquise').value || 0) * (+this.$('#zl-quote').value || 0)); };
+    this.$('#zl-akquise').oninput = vorschau;
+    this.$('#zl-quote').oninput = vorschau;
     this.$('#zl-save').onclick = () => {
+      const stunden = +this.$('#zl-akquise').value;
+      this.ziel.akquise = stunden >= 0 && stunden <= 12 ? stunden : z.akquise;
+      this.ziel.quote = zahl('#zl-quote', 1, 120, z.quote);
       this.ziel.tag = zahl('#zl-tag', 1, 30, z.tag);
       this.ziel.woche = zahl('#zl-woche', 1, 200, z.woche);
       this.ziel.karten = zahl('#zl-karten', 1, 500, z.karten);
@@ -177,14 +246,16 @@ export class Ziele {
       if (!d) return;
       if (d.ziel) this.ziel = { ...this.ziel, ...d.ziel };
       if (d.tage) this.tage = d.tage;
+      if (d.anrufe) this.anrufe = d.anrufe;
+      if (d.auto) this.auto = d.auto;
     } catch (e) { /* ignorieren */ }
   }
 
   speichern(melden = true) {
     // nur die letzten 120 Tage behalten
     const grenze = datum(new Date(Date.now() - 120 * 864e5));
-    Object.keys(this.tage).forEach(t => { if (t < grenze) delete this.tage[t]; });
-    try { localStorage.setItem(KEY, JSON.stringify({ ziel: this.ziel, tage: this.tage })); } catch (e) { /* ignorieren */ }
+    [this.tage, this.anrufe].forEach(m => Object.keys(m).forEach(t => { if (t < grenze) delete m[t]; }));
+    try { localStorage.setItem(KEY, JSON.stringify({ ziel: this.ziel, tage: this.tage, anrufe: this.anrufe, auto: this.auto })); } catch (e) { /* ignorieren */ }
     if (melden) document.dispatchEvent(new CustomEvent('ziele:geaendert'));   // für sync.js
   }
 }
