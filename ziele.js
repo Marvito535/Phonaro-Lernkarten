@@ -64,7 +64,7 @@ export class Ziele {
     this.render();
     if (this.quelle) {
       this.quelleHolen();
-      setInterval(() => { if (!document.hidden) this.quelleHolen(); }, 5 * 60000);
+      setInterval(() => { if (!document.hidden) this.quelleHolen(); }, 30000);   // alle 30 s, solange die Seite sichtbar ist
     }
     return this;
   }
@@ -114,9 +114,10 @@ export class Ziele {
       if (!r.ok) throw new Error('Status ' + r.status);
       const d = await r.json();
       if (d.tage) { this.auto = d.tage; this.speichern(false); }
+      const ang = d.angenommen ? (d.angenommen[heuteTag()] || 0) : null;
       this.quelleText = d.fehler
         ? 'Telefonanlage: ' + d.fehler
-        : 'Telefonanlage: ' + (this.auto[heuteTag()] || 0) + ' heute, Stand ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+        : 'Telefonanlage: ' + (this.auto[heuteTag()] || 0) + ' heute' + (ang !== null ? ' (' + ang + ' angenommen)' : '') + ', Stand ' + new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
     } catch (e) {
       this.quelleText = 'Telefonanlage: nicht erreichbar';
     }

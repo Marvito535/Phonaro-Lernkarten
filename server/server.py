@@ -43,8 +43,8 @@ PORTUNITY_URL = os.environ.get('PORTUNITY_URL', 'https://wr.ispsuite.portunity.d
 PORTUNITY_LOGIN = os.environ.get('PORTUNITY_LOGIN', '')
 PORTUNITY_CODE = os.environ.get('PORTUNITY_CODE', '')
 ANRUFE_DATEI = os.path.join(DATEN, 'anrufe.json')
-ANRUFE_PAUSE = 120   # frühestens alle 2 Minuten bei Portunity nachfragen (und nur, wenn die App gerade abfragt)
-ZEIT_RE = re.compile(r'(\d{4}-\d{2}-\d{2})[ T]\d{2}:\d{2}:\d{2}')
+ANRUFE_PAUSE = 20    # frühestens alle 20 Sekunden bei Portunity nachfragen (und nur, wenn die App gerade abfragt)
+DATUM_RE = re.compile(r'(\d{2})\.(\d{2})\.(\d{4})')   # Portunity: 27.10.2026
 anrufe_stand = {'zeit': 0, 'fehler': None}
 anrufe_sperre = threading.Lock()
 sperre = threading.Lock()   # verhindert, dass zwei Anfragen gleichzeitig schreiben
@@ -97,11 +97,11 @@ def sichern_datei(pfad, praefix):
 
 
 # ---------- Portunity (nur lesend: Befehl "Connections") ----------
-def portunity_abfragen(zeitraum):
+def portunity_abfragen():
     # POST statt GET, damit das Passwort nicht in einer URL (und in Logs) steht
     daten = urllib.parse.urlencode({
         'sProductLogin': PORTUNITY_LOGIN, 'sProductCode': PORTUNITY_CODE,
-        'sCommand': 'Connections', 'sCommandPeriod': zeitraum
+        'sCommand': 'Connections'   # liefert laut Antwort die letzten 30 Tage
     }).encode('latin-1')
     with urllib.request.urlopen(urllib.request.Request(PORTUNITY_URL, data=daten), timeout=15) as r:
         text = r.read(2_000_000).decode('latin-1')   # die ISPSuite antwortet in ISO-8859-1
@@ -111,7 +111,7 @@ def portunity_abfragen(zeitraum):
             continue
         k, v = zeile.split(':', 1)
         k, v = k.strip(), v.strip()
-        if k.startswith('Connection_'):
+        if re.fullmatch(r'WR_ConnectionsLog_\d+', k):   # eine Zeile pro Verbindung; _Legend nennt die Spalten
             verbindungen.append(v)
         else:
             werte[k] = v
@@ -127,55 +127,68 @@ def tag_heute():
         return time.strftime('%Y-%m-%d')
 
 
+def verbindung_lesen(zeile):
+    # Zeile: Ziel,Datum,Uhrzeit,Status,Dauer,Preis,... -> (ISO-Datum, Status); Rufnummer wird nie gespeichert
+    teile = [t.strip() for t in zeile.split(',')]
+    m = DATUM_RE.search(zeile)
+    if not m:
+        return None, ''
+    return '%s-%s-%s' % (m.group(3), m.group(2), m.group(1)), (teile[3].lower() if len(teile) > 3 else '')
+
+
 def anrufe_lesen():
     try:
         with open(ANRUFE_DATEI, encoding='utf-8') as f:
-            return json.load(f)
-    except (FileNotFoundError, ValueError):
-        return {}
+            d = json.load(f)
+            return d if isinstance(d.get('tage'), dict) else {'tage': d, 'angenommen': {}}   # altes Format
+    except (FileNotFoundError, ValueError, AttributeError):
+        return {'tage': {}, 'angenommen': {}}
 
 
 def anrufe_aktualisieren():
-    # liefert (Tageszähler, Fehlertext oder None); fragt höchstens alle ANRUFE_PAUSE Sekunden nach
+    # liefert (Daten, Fehlertext oder None); fragt höchstens alle ANRUFE_PAUSE Sekunden nach
     with anrufe_sperre:
-        tage = anrufe_lesen()
+        daten = anrufe_lesen()
         if not PORTUNITY_LOGIN or not PORTUNITY_CODE:
-            return tage, 'Portunity nicht eingerichtet'
+            return daten, 'Portunity nicht eingerichtet'
         if time.time() - anrufe_stand['zeit'] < ANRUFE_PAUSE:
-            return tage, anrufe_stand['fehler']
+            return daten, anrufe_stand['fehler']
         anrufe_stand['zeit'] = time.time()
         try:
-            for zeitraum in ('Yesterday', 'Today'):
-                werte, verbindungen = portunity_abfragen(zeitraum)
-                if werte.get('WR_Status', '').lower() != 'ok':
-                    raise RuntimeError(werte.get('WR_Comment') or 'Portunity: ' + werte.get('WR_Status', 'keine Antwort'))
-                zaehler = {}
-                for v in verbindungen:
-                    m = ZEIT_RE.search(v)   # Datum aus der Zeile; Spaltenreihenfolge ist egal
-                    tag = m.group(1) if m else (tag_heute() if zeitraum == 'Today' else None)
-                    if tag:
-                        zaehler[tag] = zaehler.get(tag, 0) + 1
-                if zeitraum == 'Today' and tag_heute() not in zaehler:
-                    zaehler[tag_heute()] = 0
-                tage.update(zaehler)
+            werte, verbindungen = portunity_abfragen()
+            if werte.get('WR_Status', '').lower() != 'ok':
+                raise RuntimeError(werte.get('WR_Comment') or 'Portunity: ' + werte.get('WR_Status', 'keine Antwort'))
+            alle, angenommen = {}, {}
+            for v in verbindungen:
+                tag, status = verbindung_lesen(v)
+                if tag:
+                    alle[tag] = alle.get(tag, 0) + 1
+                    if status == 'angenommen':
+                        angenommen[tag] = angenommen.get(tag, 0) + 1
+            heute = tag_heute()
+            alle.setdefault(heute, 0)
+            # die 30 Tage von Portunity ersetzen die gespeicherten Werte dieser Tage, ältere bleiben erhalten
+            daten['tage'].update(alle)
+            daten['angenommen'].update({t: angenommen.get(t, 0) for t in alle})
             grenze = time.strftime('%Y-%m-%d', time.localtime(time.time() - 120 * 86400))
-            tage = {t: n for t, n in tage.items() if t >= grenze}
+            for schluessel in ('tage', 'angenommen'):
+                daten[schluessel] = {t: n for t, n in daten[schluessel].items() if t >= grenze}
             tmp = ANRUFE_DATEI + '.tmp'
             with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(tage, f)
+                json.dump(daten, f)
             os.replace(tmp, ANRUFE_DATEI)
             anrufe_stand['fehler'] = None
         except Exception as e:   # Netz, Passwort, Format: Fehler melden, alten Stand behalten
             anrufe_stand['fehler'] = 'Portunity nicht erreichbar' if isinstance(e, OSError) else str(e)[:120]
-        return tage, anrufe_stand['fehler']
+        return daten, anrufe_stand['fehler']
 
 
 def anrufe_roh():
     # Diagnose: Aufbau der Antwort zeigen, Rufnummern (lange Ziffernfolgen) unkenntlich gemacht
-    werte, verbindungen = portunity_abfragen('Today')
+    werte, verbindungen = portunity_abfragen()
     maske = lambda t: re.sub(r'\d{6,}', lambda m: '#' * len(m.group()), t)
-    return {'felder': {k: maske(v) for k, v in werte.items()}, 'anzahl': len(verbindungen),
-            'beispiele': [maske(v) for v in verbindungen[:3]]}
+    return {'felder': {k: maske(v) for k, v in werte.items() if not re.fullmatch(r'WR_ConnectionsLog_\d+', k)},
+            'anzahl': len(verbindungen), 'beispiele': [maske(v) for v in verbindungen[:3]]}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -291,8 +304,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.antwort(200, anrufe_roh())
             except Exception as e:
                 return self.antwort(200, {'fehler': 'Abfrage fehlgeschlagen: ' + type(e).__name__})
-        tage, fehler = anrufe_aktualisieren()
-        self.antwort(200, {'tage': tage, 'aktualisiert': int(anrufe_stand['zeit']), 'fehler': fehler})
+        daten, fehler = anrufe_aktualisieren()
+        self.antwort(200, {'tage': daten['tage'], 'angenommen': daten['angenommen'],
+                           'aktualisiert': int(anrufe_stand['zeit']), 'fehler': fehler})
 
     def do_GET(self):
         if self.path.split('?')[0] == '/api/anrufe':
