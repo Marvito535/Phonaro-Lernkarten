@@ -180,8 +180,8 @@ export class Ziele {
         ${this.zeile('Pomodoros diese Woche', this.woche, z.woche)}
         ${z.akquise > 0 ? this.zeile(`Anrufversuche heute (${z.akquise} Std.)`, this.anrufHeute, this.anrufZiel) : ''}
         ${kartenHeute !== null ? this.zeile('Karten heute', kartenHeute, z.karten) : ''}
-        ${this.quelle && this.quelleText && z.akquise > 0 ? `<div class="${k.row}"><span class="${k.muted}">${this.esc(this.quelleText)}</span></div>` : ''}
-        <div class="${k.row}"><span class="${k.muted}">${this.nachricht()}</span></div>
+        ${this.quelle && this.quelleText && z.akquise > 0 ? `<div class="${k.muted}">${this.esc(this.quelleText)}</div>` : ''}
+        <div class="${k.muted}">${this.nachricht()}</div>
         <div class="${k.row}">
           <button class="${k.btn}" id="zl-plus" title="Einen Pomodoro nachtragen">+1 Pomodoro</button>
           <button class="${k.btn}" id="zl-minus" title="Einen Pomodoro abziehen">−1</button>
