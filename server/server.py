@@ -97,12 +97,18 @@ def sichern_datei(pfad, praefix):
 
 
 # ---------- Portunity (nur lesend: Befehl "Connections") ----------
-def portunity_abfragen():
+PERIODEN = ('NotCalced', 'Today', 'Yesterday', 'MonthThis', 'MonthLast')
+
+
+def portunity_abfragen(periode=None):
     # POST statt GET, damit das Passwort nicht in einer URL (und in Logs) steht
-    daten = urllib.parse.urlencode({
+    felder = {
         'sProductLogin': PORTUNITY_LOGIN, 'sProductCode': PORTUNITY_CODE,
-        'sCommand': 'Connections'   # liefert laut Antwort die letzten 30 Tage
-    }).encode('latin-1')
+        'sCommand': 'Connections'   # ohne Periode: die abgerechneten Verbindungen der letzten 30 Tage
+    }
+    if periode in PERIODEN:
+        felder['sCommandPeriod'] = periode   # NotCalced = noch nicht abgerechnete Verbindungen
+    daten = urllib.parse.urlencode(felder).encode('latin-1')
     with urllib.request.urlopen(urllib.request.Request(PORTUNITY_URL, data=daten), timeout=15) as r:
         text = r.read(2_000_000).decode('latin-1')   # die ISPSuite antwortet in ISO-8859-1
     werte, verbindungen = {}, []
@@ -158,6 +164,15 @@ def anrufe_aktualisieren():
             werte, verbindungen = portunity_abfragen()
             if werte.get('WR_Status', '').lower() != 'ok':
                 raise RuntimeError(werte.get('WR_Comment') or 'Portunity: ' + werte.get('WR_Status', 'keine Antwort'))
+            # Kurze oder nicht angenommene Anrufe stehen bei Portunity erst als "nicht abgerechnet".
+            # Sie kommen dazu, doppelte Zeilen (gleiche Verbindung in beiden Listen) werden übersprungen.
+            try:
+                werte2, offen = portunity_abfragen('NotCalced')
+                if werte2.get('WR_Status', '').lower() == 'ok':
+                    bekannt = set(verbindungen)
+                    verbindungen = verbindungen + [v for v in offen if v not in bekannt]
+            except Exception:
+                pass   # die abgerechneten Anrufe zählen trotzdem
             alle, angenommen = {}, {}
             for v in verbindungen:
                 tag, status = verbindung_lesen(v)
@@ -183,12 +198,12 @@ def anrufe_aktualisieren():
         return daten, anrufe_stand['fehler']
 
 
-def anrufe_roh():
+def anrufe_roh(periode=None):
     # Diagnose: Aufbau der Antwort zeigen, Rufnummern (lange Ziffernfolgen) unkenntlich gemacht
-    werte, verbindungen = portunity_abfragen()
+    werte, verbindungen = portunity_abfragen(periode)
     maske = lambda t: re.sub(r'\d{6,}', lambda m: '#' * len(m.group()), t)
     return {'felder': {k: maske(v) for k, v in werte.items() if not re.fullmatch(r'WR_ConnectionsLog_\d+', k)},
-            'anzahl': len(verbindungen), 'beispiele': [maske(v) for v in verbindungen[:3]]}
+            'anzahl': len(verbindungen), 'beispiele': [maske(v) for v in verbindungen[:15]]}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -301,7 +316,8 @@ class Handler(BaseHTTPRequestHandler):
             if not PORTUNITY_LOGIN or not PORTUNITY_CODE:
                 return self.antwort(200, {'fehler': 'Portunity nicht eingerichtet'})
             try:
-                return self.antwort(200, anrufe_roh())
+                periode = urllib.parse.parse_qs(abfrage).get('periode', [None])[0]
+                return self.antwort(200, anrufe_roh(periode))
             except Exception as e:
                 return self.antwort(200, {'fehler': 'Abfrage fehlgeschlagen: ' + type(e).__name__})
         daten, fehler = anrufe_aktualisieren()
