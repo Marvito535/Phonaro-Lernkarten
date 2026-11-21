@@ -6,6 +6,8 @@ import Fenster    from './fenster.js';
 import Sync       from './sync.js';
 import Bilder     from './bilder.js';
 import Ziele from './ziele.js';
+import Rechenblock from './rechenblock.js';
+
 
 
 const aufServer = location.hostname === 'desk.phonaro.de';   // Server-Funktionen nur dort
@@ -45,3 +47,4 @@ const skript = new Skript('#skript', {
 });
 await skript.init();
 
+new Rechenblock('#rechenblock-inhalt').init();
