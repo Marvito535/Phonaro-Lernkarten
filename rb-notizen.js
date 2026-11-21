@@ -94,12 +94,28 @@ export class Notizen extends Teil {
     this.sp.speichern(); this.zeigeBlaetter();
   }
 
+  // Steht die Position text[pos] innerhalb von $…$ oder $$…$$ ?
+  imMathe(text, pos) {
+    let modus = '';
+    for (const m of text.slice(0, pos).replace(/\\\$/g, '').matchAll(/\$\$|\$/g)) {
+      if (m[0] === '$$') modus = modus === 'd' ? '' : (modus === '' ? 'd' : modus);
+      else modus = modus === 'i' ? '' : (modus === '' ? 'i' : modus);
+    }
+    return modus !== '';
+  }
+
+  // Symbol einsetzen; außerhalb einer Formel automatisch in $…$ (mehrzeilig: $$…$$) packen
   einsetzen(sn) {
-    const ta = this.$('n-text'), a = ta.selectionStart, b = ta.selectionEnd, sel = ta.value.slice(a, b), k = sn.indexOf('¦');
+    const ta = this.$('n-text'), a = ta.selectionStart, b = ta.selectionEnd, sel = ta.value.slice(a, b);
+    let rand = 0;
+    if (!sn.startsWith('$') && !this.imMathe(ta.value, a)) {
+      if (sn.includes('\n')) sn = '$$\n' + sn + '\n$$'; else { sn = '$' + sn + '$'; rand = 1; }
+    }
+    const k = sn.indexOf('¦');
     let pos;
     if (k >= 0) {
-      if (sel) { sn = sn.replace('¦', () => sel); pos = a + sn.length; } else { sn = sn.replace('¦', ''); pos = a + k; }
-    } else pos = a + sn.length;
+      if (sel) { sn = sn.replace('¦', () => sel); pos = a + sn.length - rand; } else { sn = sn.replace('¦', ''); pos = a + k; }
+    } else pos = a + sn.length - rand;
     ta.setRangeText(sn, a, b, 'end');
     ta.setSelectionRange(pos, pos);
     ta.focus();
@@ -130,7 +146,8 @@ export class Notizen extends Teil {
   vorschau() {
     const t = this.$('n-text').value, el = this.$('n-prev');
     el.innerHTML = this.vorschauHtml(t);
-    this.$('n-info').textContent = t.length ? t.length + ' Zeichen · automatisch gespeichert' : '';
+    const ohne = t.split(/(\$\$[\s\S]*?\$\$|\$[^$\n]+\$)/g).some((x, i) => i % 2 === 0 && /\\[a-zA-Z]{2,}/.test(x));
+    this.$('n-info').textContent = (t.length ? t.length + ' Zeichen · automatisch gespeichert' : '') + (ohne ? ' · Achtung: LaTeX-Befehl (\\…) außerhalb von $…$ – wird nicht als Formel dargestellt' : '');
     if (t.trim()) Formelanzeige.setzen(el);
   }
 
