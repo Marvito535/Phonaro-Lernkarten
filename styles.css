@@ -297,3 +297,29 @@ fieldset{
 
 #ziele-win { flex: 0 0 310px; }
 .ziele input[type=number] { width: 56px; }
+
+/* ---- Schubladen (schubladen.js) – ans ENDE deiner styles.css kopieren ---- */
+/* Größe nur hier ändern: --sch (Desktop) und im @media-Block unten (Handy) */
+:root { --sch: 90px; }
+.schubladen-links, .schubladen-rechts { position: fixed; top: 12px; display: flex; flex-direction: column; gap: 8px; z-index: 5000; }
+.schubladen-links { left: 6px; }
+.schubladen-rechts { right: 6px; }
+.schublade {
+  position: relative; width: var(--sch); height: var(--sch); padding: 0 0 8px; cursor: pointer;
+  background: #e9dcc3; color: #5a4a2a; font: bold calc(var(--sch) * .27)/1 Tahoma, "MS Sans Serif", Arial, sans-serif;
+  border: 3px solid; border-color: #fffaf0 #8b7a55 #8b7a55 #fffaf0; box-shadow: inset -2px -2px #b8a77f;
+}
+.schublade::after { content: ''; position: absolute; left: 50%; bottom: calc(var(--sch) * .1); width: calc(var(--sch) * .32); height: 4px; margin-left: calc(var(--sch) * -.16); background: #8b7a55; }
+.schublade:hover { background: #f1e6cf; }
+.schublade.offen { background: #cdbf9d; color: #8b7a55; border-color: #8b7a55 #fffaf0 #fffaf0 #8b7a55; box-shadow: inset 2px 2px #b8a77f; }   /* Fenster ist draußen */
+.schublade.offen::after { display: none; }
+@media (min-width: 701px) { body { padding-left: calc(var(--sch) + 22px); padding-right: calc(var(--sch) + 22px); } }   /* Platz für die Schubladen */
+@media (max-width: 700px) {   /* Handy: kleinere Schubladen als Leiste unten */
+  :root { --sch: 56px; }
+  body { padding-bottom: 72px; }
+  .schubladen-links, .schubladen-rechts { top: auto; bottom: 6px; flex-direction: row; gap: 4px; }
+}
+
+body {
+  background: #4a3320 url('holz.jpg') center / cover no-repeat fixed;
+}

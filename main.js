@@ -7,6 +7,8 @@ import Sync       from './sync.js';
 import Bilder     from './bilder.js';
 import Ziele from './ziele.js';
 import Rechenblock from './rechenblock.js';
+import Schubladen from './schubladen.js';
+
 
 
 
@@ -48,3 +50,4 @@ const skript = new Skript('#skript', {
 await skript.init();
 
 new Rechenblock('#rechenblock-inhalt').init();
+new Schubladen().init();
