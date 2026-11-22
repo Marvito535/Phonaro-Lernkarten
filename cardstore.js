@@ -99,6 +99,19 @@ setSeite(cardId, seite) {
   this.save();
 }
 
+  // Karte nachträglich ändern (nur erlaubte Felder)
+  updateCard(cardId, felder) {
+    const card = this.state.cards.find(c => c.id === cardId);
+    if (!card) return false;
+    for (const k of ['topic', 'q', 'a', 'seite', 'qBild', 'aBild']) {
+      if (k in felder) card[k] = felder[k];
+    }
+    card.topic = card.topic || 'Allgemein';
+    card.seite = card.seite || null;
+    this.save();
+    return true;
+  }
+
   deleteCard(cardId) { // Methode zum Löschen einer Karte anhand ihrer ID
     this.state.cards = this.state.cards.filter(c => c.id !== cardId); // Entfernen der Karte aus dem Array durch Filterung
     this.save(); // Abspeichern des aktualisierten Zustands

@@ -9,6 +9,7 @@
     this.letzteSeite = null; // zuletzt im Skript angezeigte Seite (kommt per Event vom Skript-Modul)
     this.bilder = bilder;
     this.ausschnitt = null; // { blob, vorschau, seite }
+    this.bearbeiteId = null; // Karte, die gerade bearbeitet wird (null = neue Karte)
   } // Ende des Konstruktors
 
   $(selector) { // Hilfsmethode zum einfacheren Selektieren von DOM-Elementen
@@ -30,13 +31,27 @@
     document.addEventListener('skript:seite', e => { this.letzteSeite = e.detail.seite; }); // merkt sich die aktuelle Skriptseite
     this.render(); // Führt das initiale Rendern der Benutzeroberfläche aus
 
-    document.addEventListener('skript:ausschnitt', e => { // Bildausschnitt aus dem Skript übernehmen
+  document.addEventListener('skript:ausschnitt', e => { // Bildausschnitt aus dem Skript übernehmen
+    // Eingaben merken, bevor render() das Formular neu aufbaut
+    const felder = ['nt', 'nq', 'na'].concat(this.bearbeiteId ? ['ns'] : []);   // beim Bearbeiten gehört die Skriptseite zur Karte
+    const entwurf = felder.map(id => {
+      const el = this.$('#' + id);
+      return [id, el ? el.value : null];   // null = Reiter war gar nicht offen
+    });
+    const haken = ['rq', 'ra'].map(id => [id, !!(this.$('#' + id) && this.$('#' + id).checked)]);
+
     if (this.ausschnitt) URL.revokeObjectURL(this.ausschnitt.vorschau);
     this.ausschnitt = { blob: e.detail.blob, vorschau: URL.createObjectURL(e.detail.blob), seite: e.detail.seite };
     this.letzteSeite = e.detail.seite;
     this.tab = 'karten';
     this.render();
-});
+
+    entwurf.forEach(([id, wert]) => { // Eingaben zurückschreiben
+      const el = this.$('#' + id);
+      if (el && wert !== null) el.value = wert;
+    });
+    haken.forEach(([id, an]) => { const el = this.$('#' + id); if (el) el.checked = an; });
+  });
   } // Ende der init-Methode
 
   
@@ -162,15 +177,23 @@ handleAnswer(isCorrect) {
   renderKarten() { // Methode zum Rendern der Karten-Verwaltungsansicht
     const list = this.store.getCards(this.topic); // Holt alle Karten des aktuellen Themas aus dem Store
     const datalist = this.store.getTopics().map(t => `<option value="${this.esc(t)}">`).join(''); // Erstellt Autovervollständigungs-Optionen für Themen
+    const edit = this.bearbeiteId ? this.store.state.cards.find(c => c.id === this.bearbeiteId) : null; // Karte im Bearbeiten-Modus
+    if (!edit) this.bearbeiteId = null; // Karte gibt es nicht mehr (z. B. gelöscht)
 
     this.$('#main').innerHTML = ` 
-      <fieldset><legend>Neue Karte</legend> 
-        <label>Thema</label><input id="nt" list="tl" value="${this.esc(this.topic)}" placeholder="z. B. Statistik"> 
+      <fieldset><legend>${edit ? 'Karte bearbeiten' : 'Neue Karte'}</legend> 
+        <label>Thema</label><input id="nt" list="tl" value="${this.esc(edit ? edit.topic : this.topic)}" placeholder="z. B. Statistik"> 
         <datalist id="tl">${datalist}</datalist> 
-        <label>Frage</label><textarea id="nq" rows="2"></textarea> 
-        <label>Antwort</label><textarea id="na" rows="2"></textarea> 
-        <label>Skriptseite (optional)</label><input id="ns" type="number" min="1" value="${this.letzteSeite || ''}" placeholder="z. B. 12">
-        <div class="row"><button class="btn ok" id="add">Karte hinzufügen</button><span class="muted">${this.esc(this.msg)}</span></div> 
+        <label>Frage</label><textarea id="nq" rows="2">${edit ? this.esc(edit.q) : ''}</textarea> 
+        <label>Antwort</label><textarea id="na" rows="2">${edit ? this.esc(edit.a) : ''}</textarea> 
+        <label>Skriptseite (optional)</label><input id="ns" type="number" min="1" value="${edit ? (edit.seite || '') : (this.letzteSeite || '')}" placeholder="z. B. 12">
+        ${edit && (edit.qBild || edit.aBild) ? `<div class="row">
+          ${edit.qBild ? '<label><input type="checkbox" id="rq"> Bild bei der Frage entfernen</label>' : ''}
+          ${edit.aBild ? '<label><input type="checkbox" id="ra"> Bild bei der Antwort entfernen</label>' : ''}
+        </div>` : ''}
+        <div class="row">${edit
+          ? '<button class="btn ok" id="save">Änderungen speichern</button><button class="btn" id="cancel">Abbrechen</button>'
+          : '<button class="btn ok" id="add">Karte hinzufügen</button>'}<span class="muted">${this.esc(this.msg)}</span></div> 
 
          ${this.ausschnitt ? `
         <label>Bildausschnitt (S. ${this.ausschnitt.seite})</label>
@@ -187,7 +210,7 @@ handleAnswer(isCorrect) {
         <div class="item"> 
           <div><b>${this.esc(c.q)}</b><br><span class="muted">${this.esc(c.a)}</span><br><small class="muted">${this.esc(c.topic)} · Fach ${c.box}${c.seite ? ' · S. ' + c.seite : ''}</small></div> 
 
-          <button class="btn" data-s="${c.id}">Seite</button><button class="btn" data-d="${c.id}">Löschen</button> 
+          <button class="btn" data-e="${c.id}">Bearbeiten</button><button class="btn" data-s="${c.id}">Seite</button><button class="btn" data-d="${c.id}">Löschen</button> 
         </div>`).join('') || 'Noch keine Karten.'}
       </div>`; // Ende der Kartenliste
 
@@ -197,7 +220,7 @@ handleAnswer(isCorrect) {
     }; // Ende des onchange-Handlers
 
 
-  this.$('#add').onclick = async () => {
+  if (this.$('#add')) this.$('#add').onclick = async () => {
   const t = this.$('#nt').value.trim();
   const q = this.$('#nq').value.trim();
   const a = this.$('#na').value.trim();
@@ -214,6 +237,45 @@ handleAnswer(isCorrect) {
   this.msg = 'Gespeichert.';
   this.render();
 };
+
+  // ---- Karte bearbeiten ----
+  document.querySelectorAll('[data-e]').forEach(btn => {
+    btn.onclick = () => {
+      this.bearbeiteId = btn.dataset.e;
+      this.msg = '';
+      this.render();
+      const q = this.$('#nq'); if (q) { q.focus(); q.scrollIntoView({ block: 'center' }); }
+    };
+  });
+  if (this.$('#cancel')) this.$('#cancel').onclick = () => { this.bearbeiteId = null; this.msg = ''; this.render(); };
+  if (this.$('#save')) this.$('#save').onclick = async () => {
+    const c = edit;
+    const t = this.$('#nt').value.trim();
+    const q = this.$('#nq').value.trim();
+    const a = this.$('#na').value.trim();
+    const entfQ = !!(this.$('#rq') && this.$('#rq').checked);
+    const entfA = !!(this.$('#ra') && this.$('#ra').checked);
+    let qBild = entfQ ? null : c.qBild, aBild = entfA ? null : c.aBild;
+    let ziel = null;
+    if (this.ausschnitt) ziel = (document.querySelector('input[name="bildziel"]:checked') || {}).value || 'a';
+    const hatBildQ = ziel === 'q' || qBild, hatBildA = ziel === 'a' || aBild;
+    if ((!q && !hatBildQ) || (!a && !hatBildA)) { this.msg = 'Bitte Frage und Antwort ausfüllen.'; this.render(); return; }
+    if (entfQ && c.qBild) this.bilder.loeschen(c.qBild);
+    if (entfA && c.aBild) this.bilder.loeschen(c.aBild);
+    if (ziel) { // neuer Ausschnitt ersetzt ein vorhandenes Bild an dieser Stelle
+      const alt = ziel === 'q' ? qBild : aBild;
+      if (alt) this.bilder.loeschen(alt);
+      const neu = await this.bilder.speichern(this.ausschnitt.blob);
+      if (ziel === 'q') qBild = neu; else aBild = neu;
+      URL.revokeObjectURL(this.ausschnitt.vorschau);
+      this.ausschnitt = null;
+    }
+    this.store.updateCard(c.id, { topic: t, q, a, seite: parseInt(this.$('#ns').value, 10) || null, qBild, aBild });
+    this.bearbeiteId = null;
+    this.msg = 'Änderungen gespeichert.';
+    this.render();
+  };
+
 if (this.$('#bild-weg')) this.$('#bild-weg').onclick = () => { URL.revokeObjectURL(this.ausschnitt.vorschau); this.ausschnitt = null; this.render(); };
   
     document.querySelectorAll('[data-s]').forEach(btn => { // Buttons zum Setzen oder Ändern der Skriptseite
